@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Folio — Rapid Log</title>
+  <style>
+    :root {
+      --primary: #B1C7F1;
+      --on-primary: #1A3152;
+      --secondary: #FFB4A8;
+      --tertiary: #E5C281;
+      --surface: #15130E;
+      --surface-lowest: #100E09;
+      --surface-low: #1E1B16;
+      --surface-container: #221F1A;
+      --surface-high: #2C2A24;
+      --on-surface: #E8E2D9;
+      --on-surface-variant: #C4C6CF;
+      --outline-variant: #44474E;
+    }
+    html.light {
+      --primary: #0A2344;
+      --on-primary: #FFFFFF;
+      --secondary: #A03F32;
+      --tertiary: #4B3501;
+      --surface: #FFF8F0;
+      --surface-lowest: #FFFFFF;
+      --surface-low: #F9F3EA;
+      --surface-container: #F4EDE4;
+      --surface-high: #EEE7DE;
+      --on-surface: #1E1B16;
+      --on-surface-variant: #44474E;
+      --outline-variant: #C4C6CF;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--surface);
+      color: var(--on-surface);
+      font-family: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 8px;
+    }
+    .pane {
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 16px;
+    }
+    .row-flex { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .brand { color: var(--primary); font-weight: 600; font-size: 13px; }
+    .muted { color: var(--on-surface-variant); font-size: 11px; }
+    .tertiary { color: var(--tertiary); font-size: 11px; }
+    .secondary { color: var(--secondary); font-size: 11px; }
+    .badge {
+      font-size: 11px;
+      color: var(--primary);
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .btn {
+      font-family: inherit;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-container);
+      color: var(--on-surface);
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--surface-high); }
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+    .btn-primary:hover { opacity: 0.92; }
+    .grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 248px 1fr 272px;
+      gap: 8px;
+      min-height: 0;
+    }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    aside { display: flex; flex-direction: column; gap: 8px; }
+    .section {
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .section-grow { flex: 1; }
+    .sec-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--outline-variant);
+      font-size: 11px;
+    }
+    .sec-title { color: var(--primary); font-weight: 600; }
+    .sec-title-secondary { color: var(--secondary); font-weight: 600; }
+    ul { list-style: none; }
+    .space-btn, .vault-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 6px;
+      border: none;
+      background: transparent;
+      color: var(--on-surface);
+      font-family: inherit;
+      font-size: 11px;
+      text-align: left;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .space-btn:hover, .vault-btn:hover { background: var(--surface-container); }
+    .space-btn.active, .vault-btn.active {
+      background: var(--surface-high);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .vault-dir {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      padding: 4px 6px 2px;
+    }
+    .vault-indent { padding-left: 18px; }
+    main.pane {
+      background: var(--surface-lowest);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .entries-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+    .entry-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 4px;
+    }
+    .entry-row:hover { background: var(--surface-container); }
+    .entry-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+    .entry-time { font-size: 11px; color: var(--on-surface-variant); flex-shrink: 0; }
+    .sig-btn {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      width: 18px;
+      text-align: center;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .sig-action { color: var(--primary); }
+    .sig-done { color: var(--on-surface-variant); }
+    .sig-event { color: var(--tertiary); }
+    .sig-emotion { color: var(--secondary); }
+    .sig-note { color: var(--on-surface-variant); }
+    .entry-text { font-size: 13px; color: var(--on-surface); word-break: break-word; }
+    .entry-text.done { color: var(--on-surface-variant); text-decoration: line-through; }
+    .entry-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .mini-btn {
+      border: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      color: var(--on-surface-variant);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .mini-btn:hover { background: var(--surface-high); color: var(--primary); }
+    .paper-no { color: var(--secondary); }
+    .paper-ok { color: var(--on-surface-variant); }
+    .prompt-form {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 4px;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+    }
+    .prompt-sig { color: var(--primary); font-weight: 700; font-size: 13px; flex-shrink: 0; }
+    .prompt-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--on-surface);
+      font-family: inherit;
+      font-size: 13px;
+    }
+    .prompt-input::placeholder { color: var(--on-surface-variant); }
+    .sig-filter-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .sig-filter-row:hover { background: var(--surface-container); }
+    .sig-filter-row.active { background: var(--surface-high); }
+    pre.md-buffer {
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .prose-box {
+      white-space: pre-wrap;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      padding: 8px;
+      background: var(--surface-low);
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+    footer.pane {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 6px 16px;
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+    footer strong { color: var(--primary); }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 50;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: 100%;
+      max-width: 560px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    textarea, select, input.field {
+      width: 100%;
+      background: var(--surface-lowest);
+      color: var(--on-surface);
+      border: 1px solid var(--outline-variant);
+      border-radius: 4px;
+      padding: 8px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <!-- Top Bar -->
+    <header class="pane topbar">
+      <div class="row-flex">
+        <span class="brand">folio --gui v1.4</span>
+        <span id="doc-path" class="muted">Loading vault...</span>
+      </div>
+      <div class="row-flex">
+        <button type="button" id="page-btn" class="btn tertiary" title="Click to change notebook page">Notebook p. —</button>
+        <button type="button" id="weekly-btn" class="btn">Weekly Review</button>
+        <button type="button" id="monthly-btn" class="btn">Monthly Review</button>
+        <button type="button" id="import-btn" class="btn">:imp Import</button>
+        <button type="button" id="export-btn" class="btn">Export .md</button>
+        <button type="button" id="theme-btn" class="btn">Light/Dark</button>
+        <span class="badge">[SYNCED .md]</span>
+      </div>
+    </header>
+
+    <!-- 3-Column 6-Pane Grid -->
+    <div class="grid">
+      <!-- Left: [1] SPACES + [2] VAULT -->
+      <aside>
+        <section class="pane section">
+          <div class="sec-head">
+            <span class="sec-title">[1] SPACES</span>
+            <button type="button" id="new-space-btn" class="mini-btn">+ New</button>
+          </div>
+          <ul id="spaces-list"></ul>
+        </section>
+
+        <section class="pane section section-grow">
+          <div class="sec-head">
+            <span class="sec-title">[2] VAULT</span>
+            <span id="vault-name" class="muted">~/BuJo-Vault</span>
+          </div>
+          <ul id="vault-list"></ul>
+        </section>
+      </aside>
+
+      <!-- Center: [3] RAPID LOG -->
+      <main class="pane">
+        <div>
+          <div class="sec-head">
+            <span id="log-title" class="sec-title">[3] RAPID LOG</span>
+            <span id="filter-label" class="muted">Filter: ALL (0)</span>
+          </div>
+          <ul id="entries-list" class="entries-list"></ul>
+          <div id="prose-box" class="prose-box" style="display:none;"></div>
+        </div>
+
+        <form id="rapid-form" class="prompt-form">
+          <span id="prompt-sig" class="prompt-sig">:log [.] &gt;</span>
+          <input id="rapid-input" class="prompt-input" type="text" autocomplete="off"
+                 placeholder="Prefix with .  o  =  -  then Enter">
+          <button type="submit" class="btn btn-primary">ENTER</button>
+        </form>
+      </main>
+
+      <!-- Right: [4] SIGNIFIERS + [5] CARRY TO PAPER + [6] .MD BUFFER -->
+      <aside>
+        <section class="pane section">
+          <div class="sec-head">
+            <span class="sec-title">[4] SIGNIFIERS</span>
+            <button type="button" id="filter-all-btn" class="mini-btn">[0] All</button>
+          </div>
+          <div id="signifiers-list">
+            <div class="sig-filter-row" data-filter="action"><span class="sig-action">.  Action</span><span class="muted">[1]</span></div>
+            <div class="sig-filter-row" data-filter="event"><span class="sig-event">o  Event</span><span class="muted">[2]</span></div>
+            <div class="sig-filter-row" data-filter="emotion"><span class="sig-emotion">=  Emotion</span><span class="muted">[3]</span></div>
+            <div class="sig-filter-row" data-filter="note"><span class="sig-note">-  Note</span><span class="muted">[4]</span></div>
+          </div>
+        </section>
+
+        <section class="pane section">
+          <div class="sec-head">
+            <span class="sec-title-secondary">[5] CARRY TO PAPER</span>
+            <button type="button" id="paper-all-btn" class="mini-btn">Mark All</button>
+          </div>
+          <p id="paper-count" style="font-size:11px;">0 entries waiting for notebook</p>
+          <p class="muted">Click [paper:no] after copying into your physical spread.</p>
+        </section>
+
+        <section class="pane section section-grow">
+          <div class="sec-head">
+            <span class="sec-title">[6] .MD BUFFER</span>
+            <span class="muted">Obsidian</span>
+          </div>
+          <pre id="md-buffer" class="md-buffer"></pre>
+        </section>
+      </aside>
+    </div>
+
+    <!-- Bottom Bar -->
+    <footer class="pane">
+      <div class="row-flex">
+        <span><strong>.</strong> Action</span>
+        <span><strong>o</strong> Event</span>
+        <span><strong>=</strong> Emotion</span>
+        <span><strong>-</strong> Note</span>
+        <span><strong>Click sig</strong> Toggle ./×</span>
+        <span><strong>&gt;</strong> Migrate</span>
+        <span><strong>&lt;</strong> Future Log</span>
+      </div>
+      <span>TUI: folio --tui</span>
+    </footer>
+  </div>
+
+  <!-- Import Notes Modal -->
+  <div id="import-modal" class="modal-backdrop">
+    <div class="pane modal">
+      <div class="sec-head">
+        <span class="sec-title">Import Notes (Obsidian, Apple Notes, Notion, JSON, CSV)</span>
+        <button type="button" id="close-import" class="mini-btn">✕</button>
+      </div>
+      <select id="import-format">
+        <option value="auto">Auto-detect format</option>
+        <option value="markdown">Markdown / Obsidian / Notion</option>
+        <option value="text">Plain Text / Apple Notes</option>
+        <option value="csv">CSV</option>
+        <option value="json">JSON</option>
+      </select>
+      <textarea id="import-text" rows="8" placeholder="Paste Markdown checklists (- [ ] task), plain notes, JSON, or CSV..."></textarea>
+      <div class="row-flex" style="justify-content: flex-end;">
+        <button type="button" id="cancel-import" class="btn">Cancel</button>
+        <button type="button" id="submit-import" class="btn btn-primary">Import into Current Note</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      data: null,
+      relPath: '',
+      sig: '.',
+      filter: 'all',
+    };
+
+    const sigSymbol = {
+      action: '.', done: '×', migrated: '>', scheduled: '<',
+      cancelled: '~', event: 'o', emotion: '=', note: '-'
+    };
+
+    async function api(url, opts = {}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Request failed');
+      state.data = json;
+      state.relPath = json.rel_path;
+      render();
+    }
+
+    function matchesFilter(sig) {
+      if (state.filter === 'all') return true;
+      if (state.filter === 'action') {
+        return ['action', 'done', 'migrated', 'scheduled', 'cancelled'].includes(sig);
+      }
+      return sig === state.filter;
+    }
+
+    function sigClass(sig) {
+      if (sig === 'event') return 'sig-event';
+      if (sig === 'emotion') return 'sig-emotion';
+      if (sig === 'note') return 'sig-note';
+      if (sig === 'done' || sig === 'cancelled') return 'sig-done';
+      return 'sig-action';
+    }
+
+    function render() {
+      const d = state.data;
+      if (!d) return;
+
+      document.getElementById('doc-path').textContent = d.display_path;
+      document.getElementById('page-btn').textContent =
+        d.doc.page ? `Notebook p. ${d.doc.page}` : 'Notebook p. —';
+      document.getElementById('vault-name').textContent = `~/${d.vault_tree.vault_name}`;
+      document.getElementById('log-title').textContent = `[3] RAPID LOG — ${d.doc.title}`;
+      document.getElementById('md-buffer').textContent = d.raw_markdown;
+
+      const pCount = d.paper_pending;
+      document.getElementById('paper-count').textContent =
+        pCount === 1 ? '1 entry waiting for notebook' : `${pCount} entries waiting for notebook`;
+
+      // Spaces
+      const spacesUl = document.getElementById('spaces-list');
+      spacesUl.innerHTML = '';
+      d.spaces.forEach(sp => {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        const active = sp.rel_path === d.rel_path;
+        btn.className = 'space-btn' + (active ? ' active' : '');
+        btn.innerHTML = `<span>${active ? '> ' : '  '}${escapeHtml(sp.name)}</span><span class="muted">${sp.entry_count}</span>`;
+        btn.onclick = () => api(`/api/state?path=${encodeURIComponent(sp.rel_path)}`);
+        li.appendChild(btn);
+        spacesUl.appendChild(li);
+      });
+
+      // Vault tree
+      const vaultUl = document.getElementById('vault-list');
+      vaultUl.innerHTML = '';
+      d.vault_tree.nodes.forEach(node => {
+        const li = document.createElement('li');
+        if (node.is_dir) {
+          li.className = 'vault-dir';
+          li.textContent = `▾ ${node.label}`;
+        } else {
+          const btn = document.createElement('button');
+          const active = node.rel_path === d.rel_path;
+          btn.className = 'vault-btn' + (node.depth > 0 ? ' vault-indent' : '') + (active ? ' active' : '');
+          btn.textContent = `${active ? '* ' : '  '}${node.label}`;
+          btn.onclick = () => api(`/api/state?path=${encodeURIComponent(node.rel_path)}`);
+          li.appendChild(btn);
+        }
+        vaultUl.appendChild(li);
+      });
+
+      // Entries
+      const filtered = d.doc.entries.filter(e => matchesFilter(e.signifier));
+      document.getElementById('filter-label').textContent =
+        `Filter: ${state.filter.toUpperCase()} (${filtered.length})`;
+
+      const list = document.getElementById('entries-list');
+      list.innerHTML = '';
+      filtered.forEach(entry => {
+        const li = document.createElement('li');
+        li.className = 'entry-row';
+
+        const left = document.createElement('div');
+        left.className = 'entry-left';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'entry-time';
+        timeSpan.textContent = entry.time;
+
+        const sigBtn = document.createElement('button');
+        sigBtn.type = 'button';
+        sigBtn.className = `sig-btn ${sigClass(entry.signifier)}`;
+        sigBtn.textContent = sigSymbol[entry.signifier] || '.';
+        sigBtn.title = 'Click to toggle Action ./×';
+        sigBtn.onclick = () => api('/api/entries', {
+          method: 'PATCH',
+          body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'toggle_done' }),
+        });
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'entry-text' + (entry.signifier === 'done' ? ' done' : '');
+        textSpan.textContent = entry.text;
+
+        left.append(timeSpan, sigBtn, textSpan);
+
+        const actions = document.createElement('div');
+        actions.className = 'entry-actions';
+
+        if (entry.signifier === 'action') {
+          const migBtn = document.createElement('button');
+          migBtn.className = 'mini-btn';
+          migBtn.textContent = '>';
+          migBtn.title = 'Migrate to tomorrow';
+          migBtn.onclick = () => api('/api/entries', {
+            method: 'PATCH',
+            body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'migrate' }),
+          });
+          const schedBtn = document.createElement('button');
+          schedBtn.className = 'mini-btn';
+          schedBtn.textContent = '<';
+          schedBtn.title = 'Schedule to Future Log';
+          schedBtn.onclick = () => api('/api/entries', {
+            method: 'PATCH',
+            body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'schedule' }),
+          });
+          actions.append(migBtn, schedBtn);
+        }
+
+        const paperBtn = document.createElement('button');
+        paperBtn.className = 'mini-btn ' + (entry.paper_synced ? 'paper-ok' : 'paper-no');
+        paperBtn.textContent = entry.paper_synced ? '[paper:ok]' : '[paper:no]';
+        paperBtn.title = 'Toggle copied to physical notebook';
+        paperBtn.onclick = () => api('/api/entries', {
+          method: 'PATCH',
+          body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'toggle_paper' }),
+        });
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'mini-btn';
+        delBtn.textContent = '✕';
+        delBtn.title = 'Delete entry';
+        delBtn.onclick = () => api('/api/entries', {
+          method: 'DELETE',
+          body: JSON.stringify({ path: state.relPath, id: entry.id }),
+        });
+
+        actions.append(paperBtn, delBtn);
+        li.append(left, actions);
+        list.appendChild(li);
+      });
+
+      const proseBox = document.getElementById('prose-box');
+      if (d.doc.prose_lines && d.doc.prose_lines.length > 0) {
+        proseBox.style.display = 'block';
+        proseBox.textContent = d.doc.prose_lines.join('\n');
+      } else {
+        proseBox.style.display = 'none';
+      }
+
+      document.querySelectorAll('.sig-filter-row').forEach(el => {
+        el.classList.toggle('active', el.dataset.filter === state.filter);
+      });
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[m]));
+    }
+
+    // Live rapid-log prefix detection
+    const rapidInput = document.getElementById('rapid-input');
+    const promptSig = document.getElementById('prompt-sig');
+    rapidInput.addEventListener('input', () => {
+      if (/^[.o=\-]\s/.test(rapidInput.value)) {
+        state.sig = rapidInput.value[0];
+        promptSig.textContent = `:log [${state.sig}] >`;
+        rapidInput.value = rapidInput.value.slice(2);
+      }
+    });
+
+    document.getElementById('rapid-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = rapidInput.value.trim();
+      if (!text) return;
+      rapidInput.value = '';
+      await api('/api/entries', {
+        method: 'POST',
+        body: JSON.stringify({ path: state.relPath, signifier: state.sig, text }),
+      });
+    });
+
+    document.querySelectorAll('.sig-filter-row').forEach(el => {
+      el.onclick = () => {
+        state.filter = state.filter === el.dataset.filter ? 'all' : el.dataset.filter;
+        render();
+      };
+    });
+    document.getElementById('filter-all-btn').onclick = () => { state.filter = 'all'; render(); };
+
+    document.getElementById('paper-all-btn').onclick = () => api('/api/paper-all', {
+      method: 'POST',
+      body: JSON.stringify({ path: state.relPath }),
+    });
+
+    document.getElementById('new-space-btn').onclick = async () => {
+      const name = prompt('New Space name (e.g., Health, Projects):');
+      if (name && name.trim()) {
+        await api('/api/spaces', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+      }
+    };
+
+    document.getElementById('page-btn').onclick = async () => {
+      const cur = state.data?.doc?.page || 1;
+      const val = prompt('Physical Notebook page number:', String(cur));
+      const num = parseInt(val, 10);
+      if (!isNaN(num) && num > 0) {
+        await api('/api/page', { method: 'POST', body: JSON.stringify({ path: state.relPath, page: num }) });
+      }
+    };
+
+    document.getElementById('weekly-btn').onclick = () => api('/api/review', {
+      method: 'POST', body: JSON.stringify({ kind: 'weekly' }),
+    });
+    document.getElementById('monthly-btn').onclick = () => api('/api/review', {
+      method: 'POST', body: JSON.stringify({ kind: 'monthly' }),
+    });
+
+    document.getElementById('theme-btn').onclick = () => {
+      document.documentElement.classList.toggle('light');
+    };
+
+    document.getElementById('export-btn').onclick = () => {
+      window.location.href = `/api/export?path=${encodeURIComponent(state.relPath)}&format=md`;
+    };
+
+    // Import modal
+    const modal = document.getElementById('import-modal');
+    document.getElementById('import-btn').onclick = () => modal.classList.add('open');
+    document.getElementById('close-import').onclick = () => modal.classList.remove('open');
+    document.getElementById('cancel-import').onclick = () => modal.classList.remove('open');
+    document.getElementById('submit-import').onclick = async () => {
+      const content = document.getElementById('import-text').value;
+      const format = document.getElementById('import-format').value;
+      if (!content.trim()) return;
+      await api('/api/import', {
+        method: 'POST',
+        body: JSON.stringify({ path: state.relPath, format, content }),
+      });
+      document.getElementById('import-text').value = '';
+      modal.classList.remove('open');
+    };
+
+    // Initial load
+    api('/api/state');
+  </script>
+</body>
+</html>

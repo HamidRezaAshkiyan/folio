@@ -1,0 +1,29 @@
+[package]
+name = "folio"
+version = "1.4.0"
+edition = "2024"
+description = "Minimalistic cross-platform Bullet Journal companion (TUI + GUI) backed by Obsidian-compatible Markdown"
+license = "MIT"
+repository = "https://github.com/HamidRezaAshkiyan/folio"
+keywords = ["bullet-journal", "bujo", "tui", "obsidian", "markdown"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "folio"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
+dirs = "6.0"
+open = "5.3"
+ratatui = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tiny_http = "0.12"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.14"
