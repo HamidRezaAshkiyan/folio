@@ -99,6 +99,44 @@ impl Signifier {
     }
 }
 
+/// Classic Bullet Journal signifier modifiers:
+///   `*` Priority (important)
+///   `!` Inspiration / great idea / insight
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryModifier {
+    #[default]
+    None,
+    Priority,
+    Inspiration,
+}
+
+impl EntryModifier {
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            EntryModifier::None => "",
+            EntryModifier::Priority => "*",
+            EntryModifier::Inspiration => "!",
+        }
+    }
+
+    pub fn toggle_priority(self) -> Self {
+        if self == EntryModifier::Priority {
+            EntryModifier::None
+        } else {
+            EntryModifier::Priority
+        }
+    }
+
+    pub fn toggle_inspiration(self) -> Self {
+        if self == EntryModifier::Inspiration {
+            EntryModifier::None
+        } else {
+            EntryModifier::Inspiration
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryFilter {
@@ -110,7 +148,6 @@ pub enum EntryFilter {
 }
 
 impl EntryFilter {
-    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             EntryFilter::All => "ALL",
@@ -126,20 +163,62 @@ impl EntryFilter {
 pub struct Entry {
     pub id: usize,
     pub time: String,
+    #[serde(default)]
+    pub modifier: EntryModifier,
     pub signifier: Signifier,
     pub text: String,
     pub paper_synced: bool,
 }
 
 impl Entry {
-    pub fn new(id: usize, time: impl Into<String>, signifier: Signifier, text: impl Into<String>) -> Self {
+    pub fn new(
+        id: usize,
+        time: impl Into<String>,
+        signifier: Signifier,
+        text: impl Into<String>,
+    ) -> Self {
         Self {
             id,
             time: time.into(),
+            modifier: EntryModifier::None,
             signifier,
             text: text.into(),
             paper_synced: false,
         }
+    }
+
+    pub fn with_modifier(mut self, modifier: EntryModifier) -> Self {
+        self.modifier = modifier;
+        self
+    }
+
+    /// Extract inline `#tags` (e.g. `#studio`, `#reading`) from entry text.
+    pub fn inline_tags(&self) -> Vec<String> {
+        let mut tags = Vec::new();
+        for token in self.text.split_whitespace() {
+            if let Some(rest) = token.strip_prefix('#') {
+                let clean: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if !clean.is_empty() {
+                    let tag = format!("#{}", clean.to_ascii_lowercase());
+                    if !tags.contains(&tag) {
+                        tags.push(tag);
+                    }
+                }
+            }
+        }
+        tags
+    }
+
+    pub fn has_tag(&self, tag: &str) -> bool {
+        let needle = if tag.starts_with('#') {
+            tag.to_ascii_lowercase()
+        } else {
+            format!("#{}", tag.to_ascii_lowercase())
+        };
+        self.inline_tags().iter().any(|t| t == &needle)
     }
 }
 
@@ -178,10 +257,36 @@ impl Document {
         self.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1
     }
 
+    #[allow(dead_code)]
     pub fn add_entry(&mut self, time: String, signifier: Signifier, text: String) -> usize {
+        self.add_entry_with_modifier(time, EntryModifier::None, signifier, text)
+    }
+
+    pub fn add_entry_with_modifier(
+        &mut self,
+        time: String,
+        modifier: EntryModifier,
+        signifier: Signifier,
+        text: String,
+    ) -> usize {
         let id = self.next_entry_id();
-        self.entries.push(Entry::new(id, time, signifier, text));
+        self.entries
+            .push(Entry::new(id, time, signifier, text).with_modifier(modifier));
         id
+    }
+
+    /// Collect all unique inline `#tags` present in this document's entries.
+    pub fn collect_inline_tags(&self) -> Vec<String> {
+        let mut all = Vec::new();
+        for e in &self.entries {
+            for t in e.inline_tags() {
+                if !all.contains(&t) {
+                    all.push(t);
+                }
+            }
+        }
+        all.sort();
+        all
     }
 }
 
@@ -209,6 +314,17 @@ pub struct VaultTree {
     pub nodes: Vec<VaultFileNode>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub rel_path: String,
+    pub doc_title: String,
+    pub entry_id: Option<usize>,
+    pub time: Option<String>,
+    pub signifier: Option<Signifier>,
+    pub modifier: EntryModifier,
+    pub snippet: String,
+}
+
 /// Convert a human space name like "Studio & Work" to a clean filename slug "studio-work".
 pub fn slugify(name: &str) -> String {
     let mut out = String::new();
@@ -225,17 +341,63 @@ pub fn slugify(name: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
-/// Parse an optional leading rapid-log signifier prefix such as `. `, `o `, `= `, `- `.
-pub fn parse_rapid_input(raw: &str, default_sig: Signifier) -> (Signifier, String) {
+/// Parse an optional leading rapid-log modifier + signifier prefix such as
+/// `. `, `o `, `= `, `- `, `*. `, `!. `, `!- `, `*o `.
+pub fn parse_rapid_input_full(
+    raw: &str,
+    default_sig: Signifier,
+) -> (EntryModifier, Signifier, String) {
     let trimmed = raw.trim();
+
+    // Check 2-char modifier+signifier prefix like `*. `, `!- `, `*o `
     let mut chars = trimmed.chars();
-    if let (Some(first), Some(second)) = (chars.next(), chars.next())
-        && second.is_whitespace()
+    if let (Some(c1), Some(c2), Some(c3)) = (chars.next(), chars.next(), chars.next())
+        && (c1 == '*' || c1 == '!')
+        && c3.is_whitespace()
+        && let Some(sig) = Signifier::from_symbol(&c2.to_string())
     {
-        let sym = first.to_string();
-        if let Some(sig) = Signifier::from_symbol(&sym) {
-            return (sig, trimmed[first.len_utf8()..].trim().to_string());
+        let modifier = if c1 == '*' {
+            EntryModifier::Priority
+        } else {
+            EntryModifier::Inspiration
+        };
+        let rest = trimmed[c1.len_utf8() + c2.len_utf8()..].trim().to_string();
+        return (modifier, sig, rest);
+    }
+
+    // Check 1-char modifier only like `* text` or `! text`
+    let mut chars = trimmed.chars();
+    if let (Some(c1), Some(c2)) = (chars.next(), chars.next())
+        && c2.is_whitespace()
+    {
+        if c1 == '*' {
+            return (
+                EntryModifier::Priority,
+                default_sig,
+                trimmed[1..].trim().to_string(),
+            );
+        }
+        if c1 == '!' {
+            return (
+                EntryModifier::Inspiration,
+                default_sig,
+                trimmed[1..].trim().to_string(),
+            );
+        }
+        if let Some(sig) = Signifier::from_symbol(&c1.to_string()) {
+            return (
+                EntryModifier::None,
+                sig,
+                trimmed[c1.len_utf8()..].trim().to_string(),
+            );
         }
     }
-    (default_sig, trimmed.to_string())
+
+    (EntryModifier::None, default_sig, trimmed.to_string())
+}
+
+#[allow(dead_code)]
+pub fn parse_rapid_input(raw: &str, default_sig: Signifier) -> (Signifier, String) {
+    let (_, sig, text) = parse_rapid_input_full(raw, default_sig);
+    (sig, text)
 }

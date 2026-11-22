@@ -42,12 +42,15 @@ fn run_event_loop(
     loop {
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(120))?
-            && let Event::Key(key) = event::read()?
-        {
-            // Ignore key release events on Windows
-            if key.kind == crossterm::event::KeyEventKind::Press {
-                app.handle_key(key);
+        if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press => {
+                    app.handle_key(key);
+                }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse);
+                }
+                _ => {}
             }
         }
 

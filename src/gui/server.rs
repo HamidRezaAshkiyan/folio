@@ -1,6 +1,8 @@
 use crate::core::io::{ExportFormat, ImportFormat, export_document, import_from_str};
 use crate::core::markdown::serialize_markdown;
-use crate::core::model::{Document, Signifier, SpaceInfo, VaultTree, parse_rapid_input};
+use crate::core::model::{
+    Document, EntryModifier, Signifier, SpaceInfo, VaultTree, parse_rapid_input_full,
+};
 use crate::core::review::{generate_monthly_review, generate_weekly_review};
 use crate::core::vault::Vault;
 use anyhow::{Context, Result};
@@ -15,6 +17,7 @@ struct StateResponse {
     display_path: String,
     rel_path: String,
     doc: Document,
+    inline_tags: Vec<String>,
     paper_pending: usize,
     raw_markdown: String,
     spaces: Vec<SpaceInfo>,
@@ -26,6 +29,8 @@ struct AddEntryReq {
     path: String,
     #[serde(default)]
     signifier: Option<String>,
+    #[serde(default)]
+    modifier: Option<String>,
     text: String,
 }
 
@@ -36,6 +41,10 @@ struct UpdateEntryReq {
     action: String,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    scheduled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +56,12 @@ struct DeleteEntryReq {
 #[derive(Deserialize)]
 struct PathOnlyReq {
     path: String,
+}
+
+#[derive(Deserialize)]
+struct DayNavReq {
+    path: String,
+    delta: i64,
 }
 
 #[derive(Deserialize)]
@@ -98,7 +113,11 @@ pub fn run_gui(vault: Vault, default_page: u32, port: u16, open_browser: bool) -
     Ok(())
 }
 
-fn handle_request(vault: &Vault, default_page: u32, req: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
+fn handle_request(
+    vault: &Vault,
+    default_page: u32,
+    req: &mut Request,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let url = req.url().to_string();
     let (route, query) = url.split_once('?').unwrap_or((&url, ""));
 
@@ -111,6 +130,31 @@ fn handle_request(vault: &Vault, default_page: u32, req: &mut Request) -> Respon
                 Err(e) => error_response(400, &e.to_string()),
             }
         }
+        (Method::Get, "/api/search") => {
+            let q = get_query_param(query, "q").unwrap_or_default();
+            match vault.search_vault(&q) {
+                Ok(hits) => json_response(StatusCode(200), &serde_json::json!({ "hits": hits })),
+                Err(e) => error_response(500, &e.to_string()),
+            }
+        }
+        (Method::Post, "/api/day") => match read_json::<DayNavReq>(req) {
+            Ok(body) => {
+                let target_date = if body.delta == 0 {
+                    Vault::today_date()
+                } else {
+                    let base = load_or_daily(vault, default_page, &body.path)
+                        .ok()
+                        .and_then(|d| d.date)
+                        .unwrap_or_else(Vault::today_date);
+                    base + Duration::days(body.delta)
+                };
+                match vault.open_or_create_daily(target_date, default_page) {
+                    Ok(doc) => state_ok(vault, default_page, &doc.rel_path),
+                    Err(e) => error_response(500, &e.to_string()),
+                }
+            }
+            Err(e) => error_response(400, &e.to_string()),
+        },
         (Method::Post, "/api/entries") => match read_json::<AddEntryReq>(req) {
             Ok(body) => match load_or_daily(vault, default_page, &body.path) {
                 Ok(mut doc) => {
@@ -119,9 +163,25 @@ fn handle_request(vault: &Vault, default_page: u32, req: &mut Request) -> Respon
                         .as_deref()
                         .and_then(Signifier::from_symbol)
                         .unwrap_or(Signifier::Action);
-                    let (sig, clean_text) = parse_rapid_input(&body.text, default_sig);
+                    let req_mod = match body.modifier.as_deref() {
+                        Some("*") | Some("priority") => EntryModifier::Priority,
+                        Some("!") | Some("inspiration") => EntryModifier::Inspiration,
+                        _ => EntryModifier::None,
+                    };
+                    let (parsed_mod, sig, clean_text) =
+                        parse_rapid_input_full(&body.text, default_sig);
+                    let effective_mod = if parsed_mod != EntryModifier::None {
+                        parsed_mod
+                    } else {
+                        req_mod
+                    };
                     if !clean_text.is_empty() {
-                        doc.add_entry(Vault::now_hhmm(), sig, clean_text);
+                        doc.add_entry_with_modifier(
+                            Vault::now_hhmm(),
+                            effective_mod,
+                            sig,
+                            clean_text,
+                        );
                         if let Err(e) = vault.save_document(&doc) {
                             return error_response(500, &e.to_string());
                         }
@@ -139,6 +199,22 @@ fn handle_request(vault: &Vault, default_page: u32, req: &mut Request) -> Respon
                         "toggle_done" => {
                             if let Some(e) = doc.entries.iter_mut().find(|e| e.id == body.id) {
                                 e.signifier = e.signifier.toggle_done();
+                                vault.save_document(&doc)
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        "toggle_priority" => {
+                            if let Some(e) = doc.entries.iter_mut().find(|e| e.id == body.id) {
+                                e.modifier = e.modifier.toggle_priority();
+                                vault.save_document(&doc)
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        "toggle_inspiration" => {
+                            if let Some(e) = doc.entries.iter_mut().find(|e| e.id == body.id) {
+                                e.modifier = e.modifier.toggle_inspiration();
                                 vault.save_document(&doc)
                             } else {
                                 Ok(())
@@ -163,12 +239,22 @@ fn handle_request(vault: &Vault, default_page: u32, req: &mut Request) -> Respon
                             }
                         }
                         "migrate" => {
-                            let tomorrow = doc.date.unwrap_or_else(Vault::today_date) + Duration::days(1);
+                            let tomorrow =
+                                doc.date.unwrap_or_else(Vault::today_date) + Duration::days(1);
                             let target = Vault::daily_rel_path(tomorrow);
                             vault.migrate_entry(&mut doc, body.id, &target, false)
                         }
                         "schedule" => {
                             vault.migrate_entry(&mut doc, body.id, "Future Log.md", true)
+                        }
+                        "migrate_to" => {
+                            let target = body.target.unwrap_or_else(|| {
+                                let tomorrow =
+                                    doc.date.unwrap_or_else(Vault::today_date) + Duration::days(1);
+                                Vault::daily_rel_path(tomorrow)
+                            });
+                            let scheduled = body.scheduled.unwrap_or(target == "Future Log.md");
+                            vault.migrate_entry(&mut doc, body.id, &target, scheduled)
                         }
                         other => Err(anyhow::anyhow!("unknown action '{other}'")),
                     };
@@ -318,6 +404,7 @@ fn build_state(vault: &Vault, default_page: u32, rel_path: Option<&str>) -> Resu
     let vault_tree = vault.vault_tree()?;
     let raw_markdown = serialize_markdown(&doc);
     let paper_pending = doc.paper_pending_count();
+    let inline_tags = doc.collect_inline_tags();
     let display_path = vault.display_doc_path(&doc.rel_path);
     let rel = doc.rel_path.clone();
 
@@ -325,6 +412,7 @@ fn build_state(vault: &Vault, default_page: u32, rel_path: Option<&str>) -> Resu
         display_path,
         rel_path: rel,
         doc,
+        inline_tags,
         paper_pending,
         raw_markdown,
         spaces,
@@ -332,7 +420,11 @@ fn build_state(vault: &Vault, default_page: u32, rel_path: Option<&str>) -> Resu
     })
 }
 
-fn state_ok(vault: &Vault, default_page: u32, rel_path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn state_ok(
+    vault: &Vault,
+    default_page: u32,
+    rel_path: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     match build_state(vault, default_page, Some(rel_path)) {
         Ok(st) => json_response(StatusCode(200), &st),
         Err(e) => error_response(500, &e.to_string()),
@@ -363,10 +455,19 @@ fn html_response(body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     resp
 }
 
-fn json_response<T: Serialize>(status: StatusCode, data: &T) -> Response<std::io::Cursor<Vec<u8>>> {
+fn json_response<T: Serialize>(
+    status: StatusCode,
+    data: &T,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let bytes = serde_json::to_vec(data).unwrap_or_else(|_| b"{}".to_vec());
     let len = bytes.len();
-    let mut resp = Response::new(status, vec![], std::io::Cursor::new(bytes), Some(len), None);
+    let mut resp = Response::new(
+        status,
+        vec![],
+        std::io::Cursor::new(bytes),
+        Some(len),
+        None,
+    );
     if let Ok(h) = Header::from_bytes("Content-Type", "application/json; charset=utf-8") {
         resp.add_header(h);
     }

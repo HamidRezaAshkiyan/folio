@@ -1,5 +1,5 @@
-use crate::core::model::Signifier;
-use crate::tui::app::{App, FocusPane};
+use crate::core::model::{EntryModifier, Signifier};
+use crate::tui::app::{App, FocusPane, ModalState};
 use crate::tui::theme;
 use ratatui::{
     Frame,
@@ -9,8 +9,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    app.sync_list_states();
 
     // Base warm dark surface background (#15130E)
     f.render_widget(
@@ -33,12 +34,29 @@ pub fn render(f: &mut Frame, app: &App) {
     render_body_grid(f, app, outer[1]);
     render_bottom_bar(f, app, outer[2]);
 
-    if app.show_help {
-        render_help_modal(f, area);
+    match &app.modal {
+        ModalState::None => {}
+        ModalState::Help => render_help_modal(f, area),
+        ModalState::Search {
+            query,
+            results,
+            selected,
+        } => render_search_modal(f, area, query, results, *selected),
+        ModalState::Migrate {
+            entry_preview,
+            targets,
+            selected,
+            ..
+        } => render_migrate_modal(f, area, entry_preview, targets, *selected),
     }
 }
 
-fn pane_block<'a>(title_left: &'a str, title_right: Option<&'a str>, bg: ratatui::style::Color, focused: bool) -> Block<'a> {
+fn pane_block<'a>(
+    title_left: &'a str,
+    title_right: Option<&'a str>,
+    bg: ratatui::style::Color,
+    focused: bool,
+) -> Block<'a> {
     let border_color = if focused {
         theme::PRIMARY
     } else {
@@ -88,7 +106,7 @@ fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     let doc_path = app.vault.display_doc_path(&app.doc.rel_path);
     let left = Line::from(vec![
         Span::styled(
-            " folio --tui v1.4",
+            " folio --tui v1.5",
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -129,8 +147,7 @@ fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(right), cols[1]);
 }
 
-fn render_body_grid(f: &mut Frame, app: &App, area: Rect) {
-    // 3-Pane TUI Grid matching [248px | 1fr | 272px]
+fn render_body_grid(f: &mut Frame, app: &mut App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -165,12 +182,12 @@ fn render_body_grid(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(cols[2]);
 
-    render_signifiers_pane(f, right_rows[0]);
+    render_signifiers_pane(f, app, right_rows[0]);
     render_carry_to_paper_pane(f, app, right_rows[1]);
     render_md_buffer_pane(f, app, right_rows[2]);
 }
 
-fn render_spaces_pane(f: &mut Frame, app: &App, area: Rect) {
+fn render_spaces_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(
         "[1] SPACES",
         Some("Tab"),
@@ -178,6 +195,7 @@ fn render_spaces_pane(f: &mut Frame, app: &App, area: Rect) {
         app.focus == FocusPane::Spaces,
     );
     let inner = block.inner(area);
+    app.ui_rects.spaces_inner = inner;
     f.render_widget(block, area);
 
     let width = inner.width as usize;
@@ -219,7 +237,7 @@ fn render_spaces_pane(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(List::new(items), inner);
 }
 
-fn render_vault_pane(f: &mut Frame, app: &App, area: Rect) {
+fn render_vault_pane(f: &mut Frame, app: &mut App, area: Rect) {
     let right_title = format!("~/{}", app.vault_tree.vault_name);
     let block = pane_block(
         "[2] VAULT",
@@ -228,6 +246,7 @@ fn render_vault_pane(f: &mut Frame, app: &App, area: Rect) {
         app.focus == FocusPane::Vault,
     );
     let inner = block.inner(area);
+    app.ui_rects.vault_inner = inner;
     f.render_widget(block, area);
 
     let items: Vec<ListItem> = app
@@ -262,13 +281,17 @@ fn render_vault_pane(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    f.render_widget(List::new(items), inner);
+    f.render_stateful_widget(List::new(items), inner, &mut app.vault_list_state);
 }
 
-fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
-    let filtered = app.filtered_entries();
+fn render_rapid_log_pane(f: &mut Frame, app: &mut App, area: Rect) {
+    let filtered_count = app.filtered_entries().len();
     let title_left = format!("[3] RAPID LOG — {}", app.doc.title);
-    let title_right = format!("Filter: {} ({})", app.filter.label(), filtered.len());
+    let title_right = if let Some(tag) = &app.tag_filter {
+        format!("Filter: {} {tag} ({filtered_count})", app.filter.label())
+    } else {
+        format!("Filter: {} ({filtered_count})", app.filter.label())
+    };
 
     let block = pane_block(
         &title_left,
@@ -284,8 +307,12 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(4), Constraint::Length(3)])
         .split(inner);
 
-    // Entry rows
+    app.ui_rects.entries_inner = rows[0];
+    app.ui_rects.prompt_box = rows[1];
+
+    // Entry rows with auto-scrolling ListState
     let width = rows[0].width as usize;
+    let filtered = app.filtered_entries();
     if filtered.is_empty() && !app.doc.prose_lines.is_empty() {
         let prose_text = app.doc.prose_lines.join("\n");
         let para = Paragraph::new(prose_text)
@@ -294,7 +321,7 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(para, rows[0]);
     } else if filtered.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
-            "  No entries yet. Press Ctrl+N or [i] to rapid log (.  o  =  -)",
+            "  No entries yet. Press Ctrl+N or [i] to rapid log (.  o  =  -  *.  !-)",
             Style::default().fg(theme::ON_SURFACE_VARIANT),
         )));
         f.render_widget(empty, rows[0]);
@@ -322,6 +349,12 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
                     theme::SECONDARY
                 };
 
+                let (mod_str, mod_color) = match entry.modifier {
+                    EntryModifier::None => (" ", theme::ON_SURFACE_VARIANT),
+                    EntryModifier::Priority => ("*", theme::TERTIARY),
+                    EntryModifier::Inspiration => ("!", theme::SECONDARY),
+                };
+
                 let sig_color = theme::signifier_color(entry.signifier);
                 let mut text_style = Style::default().bg(row_bg);
                 if matches!(entry.signifier, Signifier::Done | Signifier::Cancelled) {
@@ -332,8 +365,8 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
                     text_style = text_style.fg(theme::ON_SURFACE);
                 }
 
-                // Compute padding so `[paper:no]` / `[paper:ok]` stays right-aligned
-                let prefix_len = 1 + entry.time.len() + 2 + 1 + 2; // " HH:MM  .  "
+                // " HH:MM * .  <text> [paper:no] "
+                let prefix_len = 1 + entry.time.len() + 2 + 2 + 2;
                 let suffix_len = paper_label.len() + 1;
                 let max_text = width.saturating_sub(prefix_len + suffix_len + 1);
                 let display_text = truncate_str(&entry.text, max_text);
@@ -342,8 +375,15 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
 
                 ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!(" {}  ", entry.time),
+                        format!(" {} ", entry.time),
                         Style::default().fg(theme::ON_SURFACE_VARIANT).bg(row_bg),
+                    ),
+                    Span::styled(
+                        mod_str,
+                        Style::default()
+                            .fg(mod_color)
+                            .bg(row_bg)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}  ", entry.signifier.symbol()),
@@ -362,7 +402,7 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
 
-        f.render_widget(List::new(items), rows[0]);
+        f.render_stateful_widget(List::new(items), rows[0], &mut app.entry_list_state);
     }
 
     // Live TUI Rapid Capture Prompt
@@ -379,7 +419,11 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
     let prompt_inner = prompt_block.inner(rows[1]);
     f.render_widget(prompt_block, rows[1]);
 
-    let sig_prefix = format!(" :log [{}] > ", app.input_sig.symbol());
+    let sig_prefix = format!(
+        " :log [{}{}] > ",
+        app.input_mod.symbol(),
+        app.input_sig.symbol()
+    );
     let prompt_line = if app.input_buf.is_empty() && !prompt_focused {
         Line::from(vec![
             Span::styled(
@@ -389,7 +433,7 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "Prefix with .  o  =  -  then Enter",
+                "Prefix .  o  =  -  or *.  !-  then Enter",
                 Style::default().fg(theme::ON_SURFACE_VARIANT),
             ),
         ])
@@ -425,16 +469,18 @@ fn render_rapid_log_pane(f: &mut Frame, app: &App, area: Rect) {
         prompt_cols[1],
     );
 
-    if prompt_focused {
-        let cursor_x = prompt_cols[0].x + (sig_prefix.chars().count() + app.input_buf.chars().count()) as u16;
+    if prompt_focused && matches!(app.modal, ModalState::None) {
+        let cursor_x =
+            prompt_cols[0].x + (sig_prefix.chars().count() + app.input_buf.chars().count()) as u16;
         let max_x = prompt_cols[0].x + prompt_cols[0].width.saturating_sub(1);
         f.set_cursor_position((cursor_x.min(max_x), prompt_cols[0].y));
     }
 }
 
-fn render_signifiers_pane(f: &mut Frame, area: Rect) {
-    let block = pane_block("[4] SIGNIFIERS", None, theme::SURFACE_LOW, false);
+fn render_signifiers_pane(f: &mut Frame, app: &mut App, area: Rect) {
+    let block = pane_block("[4] SIGNIFIERS", Some("* ! #"), theme::SURFACE_LOW, false);
     let inner = block.inner(area);
+    app.ui_rects.signifiers_inner = inner;
     f.render_widget(block, area);
 
     let width = inner.width as usize;
@@ -452,7 +498,10 @@ fn render_signifiers_pane(f: &mut Frame, area: Rect) {
             Line::from(vec![
                 Span::styled(format!(" {label}"), Style::default().fg(*color)),
                 Span::raw(" ".repeat(pad.max(1))),
-                Span::styled(format!("{key} "), Style::default().fg(theme::ON_SURFACE_VARIANT)),
+                Span::styled(
+                    format!("{key} "),
+                    Style::default().fg(theme::ON_SURFACE_VARIANT),
+                ),
             ])
         })
         .collect();
@@ -561,18 +610,21 @@ fn render_bottom_bar(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(msg.as_str(), Style::default().fg(theme::ON_SURFACE)),
         ])
     } else {
-        Line::from(vec![
-            key_span(" ^N", " New Entry  "),
-            key_span("Tab", " Space  "),
-            key_span("Space", " Toggle ./×  "),
-            key_span("m", " Mark Paper  "),
-            key_span(":w", " Write .md  "),
-            key_span(":imp", " Import Notes  "),
-            key_span("?", " Help"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>())
+        Line::from(
+            vec![
+                key_span(" ^N", " Log  "),
+                key_span("/", " Search  "),
+                key_span("[/]", " Day  "),
+                key_span("Space", " ./×  "),
+                key_span("*!", " Mod  "),
+                key_span(">", " Migrate  "),
+                key_span("m", " Paper  "),
+                key_span("?", " Help"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        )
     };
     f.render_widget(Paragraph::new(left), cols[0]);
 
@@ -596,8 +648,14 @@ fn key_span<'a>(k: &'a str, label: &'a str) -> [Span<'a>; 2] {
     ]
 }
 
-fn render_help_modal(f: &mut Frame, area: Rect) {
-    let popup = centered_rect(64, 72, area);
+fn render_search_modal(
+    f: &mut Frame,
+    area: Rect,
+    query: &str,
+    results: &[crate::core::model::SearchHit],
+    selected: usize,
+) {
+    let popup = centered_rect(68, 66, area);
     f.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -606,7 +664,160 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(theme::PRIMARY))
         .style(Style::default().bg(theme::SURFACE_LOW))
         .title(Line::from(Span::styled(
-            " Folio — Bullet Journal Keybindings & Commands ",
+            " / Instant Vault Search (Enter to jump, Esc to close) ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
+        .split(inner);
+
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::OUTLINE_VARIANT))
+        .style(Style::default().bg(theme::SURFACE_LOWEST));
+    let input_inner = input_block.inner(rows[0]);
+    f.render_widget(input_block, rows[0]);
+
+    let q_line = Line::from(vec![
+        Span::styled(
+            " / ",
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(query, Style::default().fg(theme::ON_SURFACE)),
+    ]);
+    f.render_widget(Paragraph::new(q_line), input_inner);
+    f.set_cursor_position((
+        input_inner.x + 3 + query.chars().count() as u16,
+        input_inner.y,
+    ));
+
+    if query.trim().is_empty() {
+        f.render_widget(
+            Paragraph::new("  Type to search across all Daily Notes, Spaces, Reviews, and #tags...")
+                .style(Style::default().fg(theme::ON_SURFACE_VARIANT)),
+            rows[1],
+        );
+    } else if results.is_empty() {
+        f.render_widget(
+            Paragraph::new("  No matching entries found.")
+                .style(Style::default().fg(theme::ON_SURFACE_VARIANT)),
+            rows[1],
+        );
+    } else {
+        let max_snip = (rows[1].width as usize).saturating_sub(28);
+        let items: Vec<ListItem> = results
+            .iter()
+            .enumerate()
+            .take(rows[1].height as usize)
+            .map(|(i, hit)| {
+                let bg = if i == selected {
+                    theme::SURFACE_HIGH
+                } else {
+                    theme::SURFACE_LOW
+                };
+                let sig = hit.signifier.map(|s| s.symbol()).unwrap_or(" ");
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" [{}] ", truncate_str(&hit.doc_title, 18)),
+                        Style::default().fg(theme::PRIMARY).bg(bg),
+                    ),
+                    Span::styled(
+                        format!("{}{} ", hit.modifier.symbol(), sig),
+                        Style::default()
+                            .fg(theme::TERTIARY)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        truncate_str(&hit.snippet, max_snip),
+                        Style::default().fg(theme::ON_SURFACE).bg(bg),
+                    ),
+                ]))
+            })
+            .collect();
+        f.render_widget(List::new(items), rows[1]);
+    }
+}
+
+fn render_migrate_modal(
+    f: &mut Frame,
+    area: Rect,
+    entry_preview: &str,
+    targets: &[crate::tui::app::MigrateTarget],
+    selected: usize,
+) {
+    let popup = centered_rect(54, 46, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            " > Smart Migration Target (Enter to migrate) ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(4)])
+        .split(inner);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Entry: ", Style::default().fg(theme::ON_SURFACE_VARIANT)),
+            Span::styled(
+                truncate_str(entry_preview, (rows[0].width as usize).saturating_sub(10)),
+                Style::default().fg(theme::TERTIARY),
+            ),
+        ])),
+        rows[0],
+    );
+
+    let items: Vec<ListItem> = targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let is_sel = i == selected;
+            let style = if is_sel {
+                Style::default()
+                    .fg(theme::PRIMARY)
+                    .bg(theme::SURFACE_HIGH)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::ON_SURFACE)
+            };
+            ListItem::new(Line::from(Span::styled(format!("  {} ", t.label), style)))
+        })
+        .collect();
+    f.render_widget(List::new(items), rows[1]);
+}
+
+fn render_help_modal(f: &mut Frame, area: Rect) {
+    let popup = centered_rect(66, 78, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            " Folio v1.5 — Bullet Journal Keybindings & Commands ",
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -616,36 +827,42 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
 
     let help_lines = vec![
         Line::from(Span::styled(
-            " Rapid Logging",
-            Style::default().fg(theme::TERTIARY).add_modifier(Modifier::BOLD),
+            " Rapid Logging & Classic BuJo Modifiers",
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  Ctrl+N / i      Focus rapid log prompt (prefix .  o  =  -)"),
+        Line::from("  Ctrl+N / i      Focus rapid log prompt (prefix . o = - or *. !-)"),
         Line::from("  Space           Toggle Action (.) <-> Completed (×)"),
-        Line::from("  > / <           Migrate to tomorrow (>) / Schedule to Future Log (<)"),
+        Line::from("  * / !           Toggle Priority (*) / Inspiration (!) modifier"),
+        Line::from("  > / <           Smart Migrate Picker (>) / Quick Future Log (<)"),
         Line::from("  m / M           Mark selected / all copied to paper [paper:ok]"),
         Line::from("  e / d           Edit / Delete selected entry"),
-        Line::from("  1..4 / 0        Filter by . / o / = / - / ALL"),
+        Line::from("  1..4 / # / 0    Filter signifier / cycle #tag filter / ALL"),
         Line::from(""),
         Line::from(Span::styled(
-            " Navigation & Reviews",
-            Style::default().fg(theme::TERTIARY).add_modifier(Modifier::BOLD),
+            " Navigation, Search & Reviews",
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
         )),
+        Line::from("  /  or  Ctrl+F   Instant Vault Search across all notes & #tags"),
+        Line::from("  [ / ] / t       Previous Day / Next Day / Today"),
         Line::from("  Tab / s / h     Cycle Spaces / Focus Spaces / Focus Vault"),
-        Line::from("  j / k / ↑ / ↓   Move selection"),
-        Line::from("  w / r           Open Weekly Review / Monthly Review"),
+        Line::from("  j / k / Mouse   Navigate & click panes, entries, or scroll"),
+        Line::from("  w / r           Generate Weekly Review / Monthly Review"),
         Line::from(""),
         Line::from(Span::styled(
             " Command Bar (:)",
-            Style::default().fg(theme::TERTIARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("  :w / :q / :wq   Save .md / Quit"),
         Line::from("  :space <name>   Create & open a custom Space"),
         Line::from("  :page <num>     Set physical Notebook page number"),
         Line::from("  :imp <path>     Import notes (md, obsidian, json, csv, txt)"),
         Line::from("  :exp <fmt> <p>  Export current doc (md, json, csv)"),
-        Line::from("  :weekly         Generate & open Weekly Review"),
-        Line::from("  :monthly        Generate & open Monthly Review"),
-        Line::from("  :today          Jump back to today's Daily Log"),
         Line::from(""),
         Line::from(Span::styled(
             " Press Esc or ? to close",
@@ -653,7 +870,10 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
         )),
     ];
 
-    f.render_widget(Paragraph::new(help_lines).style(Style::default().fg(theme::ON_SURFACE)), inner);
+    f.render_widget(
+        Paragraph::new(help_lines).style(Style::default().fg(theme::ON_SURFACE)),
+        inner,
+    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -711,20 +931,18 @@ mod tests {
         )
         .unwrap();
         let mut app = App::new(vault, 42).unwrap();
-        app.doc.add_entry(
+        app.doc.add_entry_with_modifier(
             "08:15".into(),
+            EntryModifier::Priority,
             Signifier::Action,
-            "Finalize studio lighting sketch".into(),
+            "Finalize studio lighting sketch #studio".into(),
         );
-        app.doc.add_entry(
-            "09:30".into(),
-            Signifier::Event,
-            "Coffee with Maya".into(),
-        );
+        app.doc
+            .add_entry("09:30".into(), Signifier::Event, "Coffee with Maya".into());
 
         let backend = TestBackend::new(120, 36);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render(f, &app)).unwrap();
+        terminal.draw(|f| render(f, &mut app)).unwrap();
 
         let buf = terminal.backend().buffer().clone();
         let rendered: String = (0..buf.area.height)
@@ -736,7 +954,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("folio --tui v1.4"));
+        assert!(rendered.contains("folio --tui v1.5"));
         assert!(rendered.contains("[SYNCED .md]"));
         assert!(rendered.contains("[1] SPACES"));
         assert!(rendered.contains("[2] VAULT"));

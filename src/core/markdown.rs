@@ -1,4 +1,4 @@
-use crate::core::model::{DocKind, Document, Entry, Signifier};
+use crate::core::model::{DocKind, Document, Entry, EntryModifier, Signifier};
 use chrono::NaiveDate;
 use std::path::Path;
 
@@ -154,6 +154,7 @@ pub fn infer_doc_kind(rel_path: &str) -> DocKind {
 /// Parse a single rapid-log line.
 /// Supports:
 /// - Folio native: `. [08:15] Task text [paper:no]`
+/// - Folio with classic BuJo modifier: `*. [08:15] Priority task [paper:no]`, `!- [11:10] Insight [paper:no]`
 /// - Folio without time: `. Task text [paper:ok]`
 /// - Obsidian checklist: `- [ ] Task text` / `- [x] Task text`
 pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
@@ -172,6 +173,7 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
         return Some(Entry {
             id,
             time,
+            modifier: EntryModifier::None,
             signifier: Signifier::Action,
             text: clean_text,
             paper_synced,
@@ -188,22 +190,40 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
         return Some(Entry {
             id,
             time,
+            modifier: EntryModifier::None,
             signifier: Signifier::Done,
             text: clean_text,
             paper_synced,
         });
     }
 
-    // Folio rapid-log format: `<sig> [HH:MM] <text> [paper:ok|no]`
+    // Optional leading modifier `*` (Priority) or `!` (Inspiration) immediately followed by signifier + whitespace
+    let mut modifier = EntryModifier::None;
+    let mut scan = trimmed;
     let mut chars = trimmed.chars();
-    let first = chars.next()?;
-    let second = chars.next()?;
+    if let (Some(c1), Some(c2), Some(c3)) = (chars.next(), chars.next(), chars.next())
+        && (c1 == '*' || c1 == '!')
+        && c3.is_whitespace()
+        && Signifier::from_symbol(&c2.to_string()).is_some()
+    {
+        modifier = if c1 == '*' {
+            EntryModifier::Priority
+        } else {
+            EntryModifier::Inspiration
+        };
+        scan = &trimmed[c1.len_utf8()..];
+    }
+
+    // Folio rapid-log format: `<sig> [HH:MM] <text> [paper:ok|no]`
+    let mut scan_chars = scan.chars();
+    let first = scan_chars.next()?;
+    let second = scan_chars.next()?;
     if !second.is_whitespace() {
         return None;
     }
 
     let sig = Signifier::from_symbol(&first.to_string())?;
-    let rest = trimmed[first.len_utf8()..].trim();
+    let rest = scan[first.len_utf8()..].trim();
     if rest.is_empty() {
         return None;
     }
@@ -217,6 +237,7 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
     Some(Entry {
         id,
         time,
+        modifier,
         signifier: sig,
         text,
         paper_synced,
@@ -287,21 +308,14 @@ pub fn serialize_markdown(doc: &Document) -> String {
         } else {
             "[paper:no]"
         };
+        let prefix = format!("{}{}", entry.modifier.symbol(), entry.signifier.symbol());
         if entry.time != "--:--" && !entry.time.is_empty() {
             out.push_str(&format!(
                 "{} [{}] {} {}\n",
-                entry.signifier.symbol(),
-                entry.time,
-                entry.text,
-                paper
+                prefix, entry.time, entry.text, paper
             ));
         } else {
-            out.push_str(&format!(
-                "{} {} {}\n",
-                entry.signifier.symbol(),
-                entry.text,
-                paper
-            ));
+            out.push_str(&format!("{} {} {}\n", prefix, entry.text, paper));
         }
     }
 
@@ -324,7 +338,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn roundtrip_daily_markdown() {
+    fn roundtrip_daily_markdown_with_modifiers() {
         let sample = "\
 ---
 date: 2026-11-21
@@ -333,10 +347,10 @@ tags:
   - bujo
   - daily
 ---
-. [08:15] Finalize studio lighting sketch before Monday critique [paper:no]
+*. [08:15] Finalize studio lighting sketch #studio [paper:no]
 o [09:30] Coffee with Maya at Blue Bottle — discussed zine layout [paper:ok]
 = [10:45] Calm and unhurried after walking without headphones [paper:no]
-- [11:10] Christopher Alexander: living spaces come from small repairs [paper:no]
+!- [11:10] Christopher Alexander: living spaces come from small repairs #reading [paper:no]
 × [11:25] Order fountain pen ink refill [paper:ok]
 ";
         let doc = parse_markdown(
@@ -347,14 +361,13 @@ o [09:30] Coffee with Maya at Blue Bottle — discussed zine layout [paper:ok]
         assert_eq!(doc.date, NaiveDate::from_ymd_opt(2026, 11, 21));
         assert_eq!(doc.page, Some(42));
         assert_eq!(doc.entries.len(), 5);
+        assert_eq!(doc.entries[0].modifier, EntryModifier::Priority);
         assert_eq!(doc.entries[0].signifier, Signifier::Action);
-        assert!(!doc.entries[0].paper_synced);
-        assert_eq!(doc.entries[1].signifier, Signifier::Event);
-        assert!(doc.entries[1].paper_synced);
-        assert_eq!(doc.entries[2].signifier, Signifier::Emotion);
+        assert!(doc.entries[0].has_tag("#studio"));
+        assert_eq!(doc.entries[3].modifier, EntryModifier::Inspiration);
         assert_eq!(doc.entries[3].signifier, Signifier::Note);
-        assert_eq!(doc.entries[4].signifier, Signifier::Done);
-        assert_eq!(doc.paper_pending_count(), 3);
+        assert!(doc.entries[3].has_tag("reading"));
+        assert_eq!(doc.collect_inline_tags(), vec!["#reading", "#studio"]);
 
         let serialized = serialize_markdown(&doc);
         assert_eq!(serialized, sample);

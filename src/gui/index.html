@@ -60,10 +60,10 @@
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
       padding: 8px 16px;
     }
-    .row-flex { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .row-flex { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .brand { color: var(--primary); font-weight: 600; font-size: 13px; }
     .muted { color: var(--on-surface-variant); font-size: 11px; }
     .tertiary { color: var(--tertiary); font-size: 11px; }
@@ -94,6 +94,48 @@
       font-weight: 600;
     }
     .btn-primary:hover { opacity: 0.92; }
+    .search-wrap { position: relative; }
+    .search-input {
+      background: var(--surface-lowest);
+      color: var(--on-surface);
+      border: 1px solid var(--outline-variant);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-family: inherit;
+      font-size: 11px;
+      width: 210px;
+    }
+    .search-input:focus { outline: none; border-color: var(--primary); }
+    .search-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      width: 380px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: var(--surface-low);
+      border: 1px solid var(--primary);
+      border-radius: 6px;
+      z-index: 40;
+      display: none;
+      padding: 4px;
+    }
+    .search-dropdown.open { display: block; }
+    .search-hit {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      color: var(--on-surface);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: block;
+    }
+    .search-hit:hover { background: var(--surface-high); }
     .grid {
       flex: 1;
       display: grid;
@@ -158,6 +200,26 @@
       justify-content: space-between;
       gap: 16px;
     }
+    .tag-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .tag-chip {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-container);
+      color: var(--primary);
+      cursor: pointer;
+    }
+    .tag-chip.active {
+      background: var(--primary);
+      color: var(--on-primary);
+      border-color: var(--primary);
+    }
     .entries-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
     .entry-row {
       display: flex;
@@ -168,13 +230,21 @@
       border-radius: 4px;
     }
     .entry-row:hover { background: var(--surface-container); }
-    .entry-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+    .entry-left { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1; }
     .entry-time { font-size: 11px; color: var(--on-surface-variant); flex-shrink: 0; }
+    .mod-mark {
+      font-weight: 700;
+      width: 10px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .mod-priority { color: var(--tertiary); }
+    .mod-inspiration { color: var(--secondary); }
     .sig-btn {
       font-family: inherit;
       font-size: 13px;
       font-weight: 700;
-      width: 18px;
+      width: 16px;
       text-align: center;
       border: none;
       background: transparent;
@@ -188,7 +258,7 @@
     .sig-note { color: var(--on-surface-variant); }
     .entry-text { font-size: 13px; color: var(--on-surface); word-break: break-word; }
     .entry-text.done { color: var(--on-surface-variant); text-decoration: line-through; }
-    .entry-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .entry-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
     .mini-btn {
       border: none;
       background: transparent;
@@ -276,7 +346,7 @@
     .modal-backdrop.open { display: flex; }
     .modal {
       width: 100%;
-      max-width: 560px;
+      max-width: 540px;
       padding: 16px;
       display: flex;
       flex-direction: column;
@@ -299,23 +369,29 @@
     <!-- Top Bar -->
     <header class="pane topbar">
       <div class="row-flex">
-        <span class="brand">folio --gui v1.4</span>
+        <span class="brand">folio --gui v1.5</span>
         <span id="doc-path" class="muted">Loading vault...</span>
       </div>
       <div class="row-flex">
+        <div class="search-wrap">
+          <input id="vault-search" class="search-input" type="search" placeholder="/ Search vault & #tags...">
+          <div id="search-dropdown" class="search-dropdown"></div>
+        </div>
+        <button type="button" id="prev-day-btn" class="btn" title="Previous Day ([)">◀</button>
+        <button type="button" id="today-btn" class="btn" title="Today (t)">Today</button>
+        <button type="button" id="next-day-btn" class="btn" title="Next Day (])">▶</button>
         <button type="button" id="page-btn" class="btn tertiary" title="Click to change notebook page">Notebook p. —</button>
-        <button type="button" id="weekly-btn" class="btn">Weekly Review</button>
-        <button type="button" id="monthly-btn" class="btn">Monthly Review</button>
-        <button type="button" id="import-btn" class="btn">:imp Import</button>
-        <button type="button" id="export-btn" class="btn">Export .md</button>
-        <button type="button" id="theme-btn" class="btn">Light/Dark</button>
+        <button type="button" id="weekly-btn" class="btn">Weekly</button>
+        <button type="button" id="monthly-btn" class="btn">Monthly</button>
+        <button type="button" id="import-btn" class="btn">:imp</button>
+        <button type="button" id="export-btn" class="btn">Export</button>
+        <button type="button" id="theme-btn" class="btn">Theme</button>
         <span class="badge">[SYNCED .md]</span>
       </div>
     </header>
 
     <!-- 3-Column 6-Pane Grid -->
     <div class="grid">
-      <!-- Left: [1] SPACES + [2] VAULT -->
       <aside>
         <section class="pane section">
           <div class="sec-head">
@@ -334,13 +410,13 @@
         </section>
       </aside>
 
-      <!-- Center: [3] RAPID LOG -->
       <main class="pane">
         <div>
           <div class="sec-head">
             <span id="log-title" class="sec-title">[3] RAPID LOG</span>
             <span id="filter-label" class="muted">Filter: ALL (0)</span>
           </div>
+          <div id="tag-bar" class="tag-bar"></div>
           <ul id="entries-list" class="entries-list"></ul>
           <div id="prose-box" class="prose-box" style="display:none;"></div>
         </div>
@@ -348,12 +424,11 @@
         <form id="rapid-form" class="prompt-form">
           <span id="prompt-sig" class="prompt-sig">:log [.] &gt;</span>
           <input id="rapid-input" class="prompt-input" type="text" autocomplete="off"
-                 placeholder="Prefix with .  o  =  -  then Enter">
+                 placeholder="Prefix .  o  =  -  or *.  !-  then Enter">
           <button type="submit" class="btn btn-primary">ENTER</button>
         </form>
       </main>
 
-      <!-- Right: [4] SIGNIFIERS + [5] CARRY TO PAPER + [6] .MD BUFFER -->
       <aside>
         <section class="pane section">
           <div class="sec-head">
@@ -365,6 +440,9 @@
             <div class="sig-filter-row" data-filter="event"><span class="sig-event">o  Event</span><span class="muted">[2]</span></div>
             <div class="sig-filter-row" data-filter="emotion"><span class="sig-emotion">=  Emotion</span><span class="muted">[3]</span></div>
             <div class="sig-filter-row" data-filter="note"><span class="sig-note">-  Note</span><span class="muted">[4]</span></div>
+          </div>
+          <div class="muted" style="padding-top:4px;border-top:1px solid var(--outline-variant);">
+            Modifiers: <strong class="tertiary">*</strong> Priority · <strong class="secondary">!</strong> Inspiration
           </div>
         </section>
 
@@ -387,16 +465,14 @@
       </aside>
     </div>
 
-    <!-- Bottom Bar -->
     <footer class="pane">
       <div class="row-flex">
         <span><strong>.</strong> Action</span>
         <span><strong>o</strong> Event</span>
         <span><strong>=</strong> Emotion</span>
         <span><strong>-</strong> Note</span>
-        <span><strong>Click sig</strong> Toggle ./×</span>
-        <span><strong>&gt;</strong> Migrate</span>
-        <span><strong>&lt;</strong> Future Log</span>
+        <span><strong>* / !</strong> Priority / Inspiration</span>
+        <span><strong>&gt;</strong> Smart Migrate</span>
       </div>
       <span>TUI: folio --tui</span>
     </footer>
@@ -424,12 +500,26 @@
     </div>
   </div>
 
+  <!-- Smart Migration Modal -->
+  <div id="migrate-modal" class="modal-backdrop">
+    <div class="pane modal">
+      <div class="sec-head">
+        <span class="sec-title">&gt; Smart Migration Target</span>
+        <button type="button" id="close-migrate" class="mini-btn">✕</button>
+      </div>
+      <p id="migrate-preview" class="muted"></p>
+      <div id="migrate-targets" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+  </div>
+
   <script>
     const state = {
       data: null,
       relPath: '',
       sig: '.',
+      mod: '',
       filter: 'all',
+      tagFilter: '',
     };
 
     const sigSymbol = {
@@ -449,12 +539,19 @@
       render();
     }
 
-    function matchesFilter(sig) {
-      if (state.filter === 'all') return true;
+    function matchesFilter(entry) {
+      const sig = entry.signifier;
+      let sigOk = true;
       if (state.filter === 'action') {
-        return ['action', 'done', 'migrated', 'scheduled', 'cancelled'].includes(sig);
+        sigOk = ['action', 'done', 'migrated', 'scheduled', 'cancelled'].includes(sig);
+      } else if (state.filter !== 'all') {
+        sigOk = sig === state.filter;
       }
-      return sig === state.filter;
+      if (!sigOk) return false;
+      if (state.tagFilter) {
+        return entry.text.toLowerCase().includes(state.tagFilter.toLowerCase());
+      }
+      return true;
     }
 
     function sigClass(sig) {
@@ -480,6 +577,21 @@
       document.getElementById('paper-count').textContent =
         pCount === 1 ? '1 entry waiting for notebook' : `${pCount} entries waiting for notebook`;
 
+      // Inline #tag chips
+      const tagBar = document.getElementById('tag-bar');
+      tagBar.innerHTML = '';
+      (d.inline_tags || []).forEach(tag => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'tag-chip' + (state.tagFilter === tag ? ' active' : '');
+        chip.textContent = tag;
+        chip.onclick = () => {
+          state.tagFilter = state.tagFilter === tag ? '' : tag;
+          render();
+        };
+        tagBar.appendChild(chip);
+      });
+
       // Spaces
       const spacesUl = document.getElementById('spaces-list');
       spacesUl.innerHTML = '';
@@ -489,7 +601,7 @@
         const active = sp.rel_path === d.rel_path;
         btn.className = 'space-btn' + (active ? ' active' : '');
         btn.innerHTML = `<span>${active ? '> ' : '  '}${escapeHtml(sp.name)}</span><span class="muted">${sp.entry_count}</span>`;
-        btn.onclick = () => api(`/api/state?path=${encodeURIComponent(sp.rel_path)}`);
+        btn.onclick = () => { state.tagFilter = ''; api(`/api/state?path=${encodeURIComponent(sp.rel_path)}`); };
         li.appendChild(btn);
         spacesUl.appendChild(li);
       });
@@ -507,16 +619,17 @@
           const active = node.rel_path === d.rel_path;
           btn.className = 'vault-btn' + (node.depth > 0 ? ' vault-indent' : '') + (active ? ' active' : '');
           btn.textContent = `${active ? '* ' : '  '}${node.label}`;
-          btn.onclick = () => api(`/api/state?path=${encodeURIComponent(node.rel_path)}`);
+          btn.onclick = () => { state.tagFilter = ''; api(`/api/state?path=${encodeURIComponent(node.rel_path)}`); };
           li.appendChild(btn);
         }
         vaultUl.appendChild(li);
       });
 
       // Entries
-      const filtered = d.doc.entries.filter(e => matchesFilter(e.signifier));
+      const filtered = d.doc.entries.filter(matchesFilter);
+      const tagSuffix = state.tagFilter ? ` ${state.tagFilter}` : '';
       document.getElementById('filter-label').textContent =
-        `Filter: ${state.filter.toUpperCase()} (${filtered.length})`;
+        `Filter: ${state.filter.toUpperCase()}${tagSuffix} (${filtered.length})`;
 
       const list = document.getElementById('entries-list');
       list.innerHTML = '';
@@ -530,6 +643,13 @@
         const timeSpan = document.createElement('span');
         timeSpan.className = 'entry-time';
         timeSpan.textContent = entry.time;
+
+        const modSpan = document.createElement('span');
+        modSpan.className = 'mod-mark ' + (
+          entry.modifier === 'priority' ? 'mod-priority' :
+          entry.modifier === 'inspiration' ? 'mod-inspiration' : ''
+        );
+        modSpan.textContent = entry.modifier === 'priority' ? '*' : entry.modifier === 'inspiration' ? '!' : '';
 
         const sigBtn = document.createElement('button');
         sigBtn.type = 'button';
@@ -545,29 +665,38 @@
         textSpan.className = 'entry-text' + (entry.signifier === 'done' ? ' done' : '');
         textSpan.textContent = entry.text;
 
-        left.append(timeSpan, sigBtn, textSpan);
+        left.append(timeSpan, modSpan, sigBtn, textSpan);
 
         const actions = document.createElement('div');
         actions.className = 'entry-actions';
+
+        const prioBtn = document.createElement('button');
+        prioBtn.className = 'mini-btn' + (entry.modifier === 'priority' ? ' mod-priority' : '');
+        prioBtn.textContent = '*';
+        prioBtn.title = 'Toggle Priority (*)';
+        prioBtn.onclick = () => api('/api/entries', {
+          method: 'PATCH',
+          body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'toggle_priority' }),
+        });
+
+        const inspBtn = document.createElement('button');
+        inspBtn.className = 'mini-btn' + (entry.modifier === 'inspiration' ? ' mod-inspiration' : '');
+        inspBtn.textContent = '!';
+        inspBtn.title = 'Toggle Inspiration (!)';
+        inspBtn.onclick = () => api('/api/entries', {
+          method: 'PATCH',
+          body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'toggle_inspiration' }),
+        });
+
+        actions.append(prioBtn, inspBtn);
 
         if (entry.signifier === 'action') {
           const migBtn = document.createElement('button');
           migBtn.className = 'mini-btn';
           migBtn.textContent = '>';
-          migBtn.title = 'Migrate to tomorrow';
-          migBtn.onclick = () => api('/api/entries', {
-            method: 'PATCH',
-            body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'migrate' }),
-          });
-          const schedBtn = document.createElement('button');
-          schedBtn.className = 'mini-btn';
-          schedBtn.textContent = '<';
-          schedBtn.title = 'Schedule to Future Log';
-          schedBtn.onclick = () => api('/api/entries', {
-            method: 'PATCH',
-            body: JSON.stringify({ path: state.relPath, id: entry.id, action: 'schedule' }),
-          });
-          actions.append(migBtn, schedBtn);
+          migBtn.title = 'Smart Migrate (Tomorrow / Space / Future Log)';
+          migBtn.onclick = () => openMigrateModal(entry);
+          actions.append(migBtn);
         }
 
         const paperBtn = document.createElement('button');
@@ -606,20 +735,74 @@
       });
     }
 
+    function openMigrateModal(entry) {
+      const modal = document.getElementById('migrate-modal');
+      document.getElementById('migrate-preview').textContent = `Entry: ${entry.text}`;
+      const list = document.getElementById('migrate-targets');
+      list.innerHTML = '';
+
+      const options = [
+        { label: '> Tomorrow (Daily Log)', target: null, scheduled: false },
+        { label: '< Future Log (Scheduled)', target: 'Future Log.md', scheduled: true },
+      ];
+      (state.data?.spaces || []).forEach(sp => {
+        if (!sp.is_daily && sp.rel_path !== state.relPath) {
+          options.push({ label: `> Space: ${sp.name}`, target: sp.rel_path, scheduled: false });
+        }
+      });
+
+      options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn';
+        btn.style.textAlign = 'left';
+        btn.textContent = opt.label;
+        btn.onclick = async () => {
+          modal.classList.remove('open');
+          await api('/api/entries', {
+            method: 'PATCH',
+            body: JSON.stringify({
+              path: state.relPath,
+              id: entry.id,
+              action: 'migrate_to',
+              target: opt.target,
+              scheduled: opt.scheduled,
+            }),
+          });
+        };
+        list.appendChild(btn);
+      });
+
+      modal.classList.add('open');
+    }
+
     function escapeHtml(str) {
       return str.replace(/[&<>"']/g, m => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[m]));
     }
 
-    // Live rapid-log prefix detection
+    // Live rapid-log prefix detection (including *. and !-)
     const rapidInput = document.getElementById('rapid-input');
     const promptSig = document.getElementById('prompt-sig');
+    function updatePromptLabel() {
+      promptSig.textContent = `:log [${state.mod}${state.sig}] >`;
+    }
     rapidInput.addEventListener('input', () => {
-      if (/^[.o=\-]\s/.test(rapidInput.value)) {
-        state.sig = rapidInput.value[0];
-        promptSig.textContent = `:log [${state.sig}] >`;
-        rapidInput.value = rapidInput.value.slice(2);
+      const v = rapidInput.value;
+      if (/^[*!][.o=\-]\s/.test(v)) {
+        state.mod = v[0];
+        state.sig = v[1];
+        rapidInput.value = v.slice(3);
+        updatePromptLabel();
+      } else if (/^[*!]\s/.test(v)) {
+        state.mod = state.mod === v[0] ? '' : v[0];
+        rapidInput.value = v.slice(2);
+        updatePromptLabel();
+      } else if (/^[.o=\-]\s/.test(v)) {
+        state.sig = v[0];
+        rapidInput.value = v.slice(2);
+        updatePromptLabel();
       }
     });
 
@@ -628,10 +811,65 @@
       const text = rapidInput.value.trim();
       if (!text) return;
       rapidInput.value = '';
+      const mod = state.mod;
+      state.mod = '';
+      updatePromptLabel();
       await api('/api/entries', {
         method: 'POST',
-        body: JSON.stringify({ path: state.relPath, signifier: state.sig, text }),
+        body: JSON.stringify({ path: state.relPath, signifier: state.sig, modifier: mod, text }),
       });
+    });
+
+    // Live Vault Search
+    const searchInput = document.getElementById('vault-search');
+    const searchDropdown = document.getElementById('search-dropdown');
+    let searchTimer = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const q = searchInput.value.trim();
+      if (!q) {
+        searchDropdown.classList.remove('open');
+        searchDropdown.innerHTML = '';
+        return;
+      }
+      searchTimer = setTimeout(async () => {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+        const json = await res.json();
+        searchDropdown.innerHTML = '';
+        const hits = json.hits || [];
+        if (hits.length === 0) {
+          searchDropdown.innerHTML = '<div class="muted" style="padding:6px;">No matching entries</div>';
+        } else {
+          hits.slice(0, 20).forEach(hit => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'search-hit';
+            btn.innerHTML = `<strong style="color:var(--primary)">[${escapeHtml(hit.doc_title)}]</strong> ${escapeHtml(hit.snippet)}`;
+            btn.onclick = () => {
+              searchDropdown.classList.remove('open');
+              searchInput.value = '';
+              state.tagFilter = '';
+              api(`/api/state?path=${encodeURIComponent(hit.rel_path)}`);
+            };
+            searchDropdown.appendChild(btn);
+          });
+        }
+        searchDropdown.classList.add('open');
+      }, 120);
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.search-wrap')) searchDropdown.classList.remove('open');
+    });
+
+    // Day navigation
+    document.getElementById('prev-day-btn').onclick = () => api('/api/day', {
+      method: 'POST', body: JSON.stringify({ path: state.relPath, delta: -1 }),
+    });
+    document.getElementById('today-btn').onclick = () => api('/api/day', {
+      method: 'POST', body: JSON.stringify({ path: state.relPath, delta: 0 }),
+    });
+    document.getElementById('next-day-btn').onclick = () => api('/api/day', {
+      method: 'POST', body: JSON.stringify({ path: state.relPath, delta: 1 }),
     });
 
     document.querySelectorAll('.sig-filter-row').forEach(el => {
@@ -640,11 +878,14 @@
         render();
       };
     });
-    document.getElementById('filter-all-btn').onclick = () => { state.filter = 'all'; render(); };
+    document.getElementById('filter-all-btn').onclick = () => {
+      state.filter = 'all';
+      state.tagFilter = '';
+      render();
+    };
 
     document.getElementById('paper-all-btn').onclick = () => api('/api/paper-all', {
-      method: 'POST',
-      body: JSON.stringify({ path: state.relPath }),
+      method: 'POST', body: JSON.stringify({ path: state.relPath }),
     });
 
     document.getElementById('new-space-btn').onclick = async () => {
@@ -678,11 +919,11 @@
       window.location.href = `/api/export?path=${encodeURIComponent(state.relPath)}&format=md`;
     };
 
-    // Import modal
-    const modal = document.getElementById('import-modal');
-    document.getElementById('import-btn').onclick = () => modal.classList.add('open');
-    document.getElementById('close-import').onclick = () => modal.classList.remove('open');
-    document.getElementById('cancel-import').onclick = () => modal.classList.remove('open');
+    // Modals
+    const importModal = document.getElementById('import-modal');
+    document.getElementById('import-btn').onclick = () => importModal.classList.add('open');
+    document.getElementById('close-import').onclick = () => importModal.classList.remove('open');
+    document.getElementById('cancel-import').onclick = () => importModal.classList.remove('open');
     document.getElementById('submit-import').onclick = async () => {
       const content = document.getElementById('import-text').value;
       const format = document.getElementById('import-format').value;
@@ -692,10 +933,11 @@
         body: JSON.stringify({ path: state.relPath, format, content }),
       });
       document.getElementById('import-text').value = '';
-      modal.classList.remove('open');
+      importModal.classList.remove('open');
     };
+    document.getElementById('close-migrate').onclick = () =>
+      document.getElementById('migrate-modal').classList.remove('open');
 
-    // Initial load
     api('/api/state');
   </script>
 </body>

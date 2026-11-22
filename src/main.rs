@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use core::config::FolioConfig;
 use core::io::{ExportFormat, ImportFormat, export_document, import_from_file};
-use core::model::{Signifier, parse_rapid_input};
+use core::model::{Signifier, parse_rapid_input_full};
 use core::review::{generate_monthly_review, generate_weekly_review};
 use core::vault::Vault;
 use std::fs;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 /// Folio — Minimalistic cross-platform Bullet Journal (TUI + GUI) backed by Obsidian Markdown.
 #[derive(Parser, Debug)]
-#[command(name = "folio", version = "1.4.0", about)]
+#[command(name = "folio", version = "1.5.0", about)]
 struct Cli {
     /// Launch the Ratatui TUI (default when no subcommand or --gui is passed)
     #[arg(long)]
@@ -85,6 +85,11 @@ enum Commands {
         /// Name of the space (e.g. "Studio & Work")
         name: Vec<String>,
     },
+    /// Search across all Daily Notes, Spaces, Reviews, and #tags
+    Search {
+        /// Search query (text or #tag)
+        query: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -110,17 +115,18 @@ fn handle_subcommand(vault: &Vault, default_page: u32, cmd: Commands) -> Result<
     match cmd {
         Commands::Log { text, space } => {
             let joined = text.join(" ");
-            let (sig, clean) = parse_rapid_input(&joined, Signifier::Action);
+            let (modifier, sig, clean) = parse_rapid_input_full(&joined, Signifier::Action);
             let mut doc = if let Some(sp) = space {
                 vault.create_space(&sp)?
             } else {
                 vault.open_or_create_daily(today, default_page)?
             };
             let time = Vault::now_hhmm();
-            doc.add_entry(time.clone(), sig, clean.clone());
+            doc.add_entry_with_modifier(time.clone(), modifier, sig, clean.clone());
             vault.save_document(&doc)?;
             println!(
-                "Logged: {} [{}] {} [paper:no] -> {}",
+                "Logged: {}{} [{}] {} [paper:no] -> {}",
+                modifier.symbol(),
                 sig.symbol(),
                 time,
                 clean,
@@ -186,6 +192,24 @@ fn handle_subcommand(vault: &Vault, default_page: u32, cmd: Commands) -> Result<
             let joined = name.join(" ");
             let doc = vault.create_space(&joined)?;
             println!("Space ready: {} ({})", doc.title, doc.rel_path);
+        }
+        Commands::Search { query } => {
+            let q = query.join(" ");
+            let hits = vault.search_vault(&q)?;
+            if hits.is_empty() {
+                println!("No matches for '{q}'");
+            } else {
+                for hit in hits {
+                    let sig = hit.signifier.map(|s| s.symbol()).unwrap_or(" ");
+                    println!(
+                        "[{}] {}{} {}",
+                        hit.doc_title,
+                        hit.modifier.symbol(),
+                        sig,
+                        hit.snippet
+                    );
+                }
+            }
         }
     }
     Ok(())

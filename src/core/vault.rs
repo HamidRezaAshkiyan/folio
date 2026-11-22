@@ -1,6 +1,7 @@
 use crate::core::markdown::{parse_markdown, serialize_markdown};
 use crate::core::model::{
-    DocKind, Document, Entry, Signifier, SpaceInfo, VaultFileNode, VaultTree, slugify,
+    DocKind, Document, Entry, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultFileNode,
+    VaultTree, slugify,
 };
 use anyhow::{Context, Result, anyhow};
 use chrono::{Local, NaiveDate};
@@ -460,6 +461,99 @@ impl Vault {
         ));
         self.save_document(&target_doc)?;
         Ok(())
+    }
+
+    /// Full-text search across all Markdown files in the vault (Daily Notes, Spaces, Reviews, Future Log).
+    pub fn search_vault(&self, query: &str) -> Result<Vec<SearchHit>> {
+        let needle = query.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let tree = self.vault_tree()?;
+        let mut hits = Vec::new();
+
+        for node in tree.nodes {
+            if node.is_dir {
+                continue;
+            }
+            let Ok(doc) = self.load_document(&node.rel_path) else {
+                continue;
+            };
+            let mut matched_in_doc = false;
+
+            for entry in &doc.entries {
+                if entry.text.to_ascii_lowercase().contains(&needle)
+                    || entry.time.contains(&needle)
+                {
+                    hits.push(SearchHit {
+                        rel_path: doc.rel_path.clone(),
+                        doc_title: doc.title.clone(),
+                        entry_id: Some(entry.id),
+                        time: Some(entry.time.clone()),
+                        signifier: Some(entry.signifier),
+                        modifier: entry.modifier,
+                        snippet: entry.text.clone(),
+                    });
+                    matched_in_doc = true;
+                }
+            }
+
+            if !matched_in_doc {
+                for line in &doc.prose_lines {
+                    if line.to_ascii_lowercase().contains(&needle) {
+                        hits.push(SearchHit {
+                            rel_path: doc.rel_path.clone(),
+                            doc_title: doc.title.clone(),
+                            entry_id: None,
+                            time: None,
+                            signifier: None,
+                            modifier: EntryModifier::None,
+                            snippet: line.trim().to_string(),
+                        });
+                        break;
+                    }
+                }
+            }
+
+            if hits.len() >= 100 {
+                break;
+            }
+        }
+
+        Ok(hits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn searches_across_daily_and_spaces() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::open_or_init(dir.path().to_path_buf(), &["Studio & Work".into()]).unwrap();
+
+        let d1 = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+        let mut daily = vault.open_or_create_daily(d1, 42).unwrap();
+        daily.add_entry("09:30".into(), Signifier::Event, "Coffee with Maya #social".into());
+        vault.save_document(&daily).unwrap();
+
+        let mut space = vault.load_document("Spaces/studio-work.md").unwrap();
+        space.add_entry_with_modifier(
+            "14:00".into(),
+            EntryModifier::Priority,
+            Signifier::Action,
+            "Review Maya zine proofs #studio".into(),
+        );
+        vault.save_document(&space).unwrap();
+
+        let hits = vault.search_vault("maya").unwrap();
+        assert_eq!(hits.len(), 2);
+        let tag_hits = vault.search_vault("#studio").unwrap();
+        assert_eq!(tag_hits.len(), 1);
+        assert_eq!(tag_hits[0].modifier, EntryModifier::Priority);
     }
 }
 

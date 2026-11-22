@@ -95,13 +95,16 @@ folio export --format json --output today.json
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+N` / `i` | Focus rapid-log prompt (`:log [.] >`; prefix with `. `, `o `, `= `, `- `) |
+| `Ctrl+N` / `i` | Focus rapid-log prompt (`:log [.] >`; prefix `. `, `o `, `= `, `- `, `*. `, `!- `) |
+| `/` / `Ctrl+F` | Instant Vault Search across all Daily Notes, Spaces, Reviews, and `#tags` |
+| `[` / `]` / `t` | Previous Day / Next Day / Today |
 | `Tab` | Cycle through Spaces |
-| `j` / `k` or `↑` / `↓` | Navigate entries or vault files |
+| `j` / `k` / Mouse | Navigate, click panes/entries/files, or scroll with mouse wheel |
 | `Space` | Toggle Action `.` ↔ Completed `×` |
+| `*` / `!` | Toggle Priority (`*`) / Inspiration (`!`) modifier |
 | `m` / `M` | Mark selected / all entries copied to physical paper (`[paper:ok]`) |
-| `>` / `<` | Migrate action to tomorrow (`>`) / Schedule to Future Log (`<`) |
-| `1`–`4` / `0` | Filter by `.` / `o` / `=` / `-` / `ALL` |
+| `>` / `<` | Smart Migration Picker (Tomorrow / Space / Future Log) / Quick Future Log |
+| `1`–`4` / `#` / `0` | Filter by `.` / `o` / `=` / `-` / cycle `#tag` filter / `ALL` |
 | `e` / `d` | Edit / Delete selected entry |
 | `w` / `r` | Generate & open Weekly / Monthly Review |
 | `:w` / `:q` / `:wq` | Save `.md` / Quit |
