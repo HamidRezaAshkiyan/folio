@@ -32,6 +32,14 @@ Designed for rapid logging when you don't have your physical notebook handy — 
 
 ## Installation
 
+### Prebuilt Binaries (macOS, Linux, Windows)
+
+Download the latest release archive for your platform from the [GitHub Releases](https://github.com/HamidRezaAshkiyan/folio/releases) page:
+- **macOS (Apple Silicon)**: `folio-macos-arm64.tar.gz`
+- **macOS (Intel)**: `folio-macos-x64.tar.gz`
+- **Linux (x86_64)**: `folio-linux-x64.tar.gz`
+- **Windows (x86_64)**: `folio-windows-x64.zip`
+
 ### From Source (macOS, Linux, Windows)
 
 ```bash
