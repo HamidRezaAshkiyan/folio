@@ -106,7 +106,7 @@ fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     let doc_path = app.vault.display_doc_path(&app.doc.rel_path);
     let left = Line::from(vec![
         Span::styled(
-            " folio --tui v1.5",
+            format!(" folio --tui v{}", env!("CARGO_PKG_VERSION")),
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -817,7 +817,7 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(theme::PRIMARY))
         .style(Style::default().bg(theme::SURFACE_LOW))
         .title(Line::from(Span::styled(
-            " Folio v1.5 — Bullet Journal Keybindings & Commands ",
+            format!(" Folio v{} — Bullet Journal Keybindings & Commands ", env!("CARGO_PKG_VERSION")),
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),

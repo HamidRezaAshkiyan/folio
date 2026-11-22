@@ -122,7 +122,9 @@ fn handle_request(
     let (route, query) = url.split_once('?').unwrap_or((&url, ""));
 
     match (req.method(), route) {
-        (Method::Get, "/") | (Method::Get, "/index.html") => html_response(INDEX_HTML),
+        (Method::Get, "/") | (Method::Get, "/index.html") => {
+            html_response(&INDEX_HTML.replace("{{VERSION}}", env!("CARGO_PKG_VERSION")))
+        }
         (Method::Get, "/api/state") => {
             let rel = get_query_param(query, "path");
             match build_state(vault, default_page, rel.as_deref()) {
