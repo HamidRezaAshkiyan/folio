@@ -32,9 +32,27 @@ Designed for rapid logging when you don't have your physical notebook handy — 
 
 ## Installation
 
-### Prebuilt Binaries (macOS, Linux, Windows)
+### Native Installers (macOS, Windows, Linux)
 
-Download the latest release archive for your platform from the [GitHub Releases](https://github.com/HamidRezaAshkiyan/folio/releases) page:
+Download the installer for your platform from the [GitHub Releases](https://github.com/HamidRezaAshkiyan/folio/releases) page:
+- **macOS (Apple Silicon & Intel)**: `folio-macos-universal.pkg`
+- **Windows (x86_64)**: `folio-windows-x64-setup.exe`
+- **Debian / Ubuntu Linux**: `folio-linux-x64.deb` (`sudo dpkg -i folio-linux-x64.deb`)
+
+### One-Line Shell / PowerShell Installer
+
+**macOS & Linux:**
+```sh
+curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.ps1 | iex
+```
+
+### Portable Archives
+
 - **macOS (Apple Silicon)**: `folio-macos-arm64.tar.gz`
 - **macOS (Intel)**: `folio-macos-x64.tar.gz`
 - **Linux (x86_64)**: `folio-linux-x64.tar.gz`
