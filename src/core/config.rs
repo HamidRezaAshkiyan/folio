@@ -3,11 +3,41 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RtlMode {
+    /// Detect RTL per entry/line automatically (great for mixed RTL + LTR notes)
+    #[default]
+    Auto,
+    /// Force Left-to-Right layout and alignment
+    Ltr,
+    /// Full mirrored Right-to-Left UI layout and alignment
+    Rtl,
+}
+
+impl RtlMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RtlMode::Auto => "AUTO",
+            RtlMode::Ltr => "LTR",
+            RtlMode::Rtl => "RTL",
+        }
+    }
+}
+
+fn default_gui_theme() -> String {
+    "dark".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolioConfig {
     pub vault_path: PathBuf,
     pub notebook_page: u32,
     pub default_spaces: Vec<String>,
+    #[serde(default)]
+    pub rtl_mode: RtlMode,
+    #[serde(default = "default_gui_theme")]
+    pub gui_theme: String,
 }
 
 impl Default for FolioConfig {
@@ -21,6 +51,8 @@ impl Default for FolioConfig {
                 "Reading & Study".to_string(),
                 "Personal".to_string(),
             ],
+            rtl_mode: RtlMode::Auto,
+            gui_theme: default_gui_theme(),
         }
     }
 }

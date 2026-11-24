@@ -954,7 +954,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("folio --tui v1.5"));
+        assert!(rendered.contains(&format!("folio --tui v{}", env!("CARGO_PKG_VERSION"))));
         assert!(rendered.contains("[SYNCED .md]"));
         assert!(rendered.contains("[1] SPACES"));
         assert!(rendered.contains("[2] VAULT"));

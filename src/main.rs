@@ -14,21 +14,25 @@ use std::path::PathBuf;
 
 /// Folio — Minimalistic cross-platform Bullet Journal (TUI + GUI) backed by Obsidian Markdown.
 #[derive(Parser, Debug)]
-#[command(name = "folio", version = "1.5.0", about)]
+#[command(name = "folio", version = env!("CARGO_PKG_VERSION"), about)]
 struct Cli {
     /// Launch the Ratatui TUI (default when no subcommand or --gui is passed)
     #[arg(long)]
     tui: bool,
 
-    /// Launch the embedded local Web GUI
+    /// Launch the native desktop GUI (with RTL support)
     #[arg(long)]
     gui: bool,
 
-    /// Port for --gui local server
+    /// Launch the legacy embedded local Web GUI in a browser
+    #[arg(long)]
+    web: bool,
+
+    /// Port for --web local server
     #[arg(long, default_value_t = 3420)]
     port: u16,
 
-    /// Do not auto-open the browser when running --gui
+    /// Do not auto-open the browser when running --web
     #[arg(long)]
     no_open: bool,
 
@@ -103,7 +107,9 @@ fn main() -> Result<()> {
     }
 
     if cli.gui {
-        gui::run_gui(vault, cfg.notebook_page, cli.port, !cli.no_open)
+        gui::run_native_gui(vault, cfg)
+    } else if cli.web {
+        gui::run_web_gui(vault, cfg.notebook_page, cli.port, !cli.no_open)
     } else {
         // Default to TUI (`folio` or `folio --tui`)
         tui::run_tui(vault, cfg.notebook_page)

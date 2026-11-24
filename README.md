@@ -1,6 +1,6 @@
 # Folio
 
-Minimalistic, cross-platform **Bullet Journal (BuJo)** companion app with a **Ratatui TUI** (`folio --tui`) and an **embedded local Web GUI** (`folio --gui`), backed by plain **Obsidian-compatible Markdown** files.
+Minimalistic, cross-platform **Bullet Journal (BuJo)** companion app with a **Ratatui TUI** (`folio --tui`) and a **native Desktop GUI** (`folio --gui`, built with Iced + RTL support), backed by plain **Obsidian-compatible Markdown** files.
 
 Designed for rapid logging when you don't have your physical notebook handy — with a built-in **Carry to Paper** queue (`[paper:no]` / `[paper:ok]`) so you can transcribe entries back into your analog spread.
 
@@ -10,7 +10,8 @@ Designed for rapid logging when you don't have your physical notebook handy — 
 
 - **Dual Interface (Single Binary)**:
   - `folio --tui` — 6-pane Ratatui terminal UI (`[1] SPACES`, `[2] VAULT`, `[3] RAPID LOG`, `[4] SIGNIFIERS`, `[5] CARRY TO PAPER`, `[6] .MD BUFFER`)
-  - `folio --gui` — Zero-dependency embedded local Web GUI (Dark & Light themes)
+  - `folio --gui` — Native desktop GUI (Dark & Light themes, custom app icon, and live `LTR` / `AUTO` / `RTL` toggle with full Arabic/Persian text shaping)
+  - `folio --web` — Optional embedded local Web GUI (`--port 3420`)
   - `folio log "..."` — Instant one-liner rapid logging from any shell
 - **Full Bullet Journal Method**:
   - `.` **Action** (toggleable to `×` Completed, `>` Migrated, `<` Scheduled, `~` Cancelled)
@@ -82,9 +83,11 @@ cargo build --release
 folio
 folio --tui
 
-# Launch the embedded Web GUI (opens in browser)
+# Launch the Native Desktop GUI (with RTL toggle)
 folio --gui
-folio --gui --port 3420 --no-open
+
+# Launch the optional local Web GUI (opens in browser)
+folio --web --port 3420 --no-open
 
 # Use a custom Obsidian vault path
 folio --vault ~/Obsidian/My-Vault --tui

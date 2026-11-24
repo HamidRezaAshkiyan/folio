@@ -192,17 +192,17 @@ impl Entry {
         self
     }
 
-    /// Extract inline `#tags` (e.g. `#studio`, `#reading`) from entry text.
+    /// Extract inline `#tags` (e.g. `#studio`, `#reading`, `#یادداشت`) from entry text.
     pub fn inline_tags(&self) -> Vec<String> {
         let mut tags = Vec::new();
         for token in self.text.split_whitespace() {
             if let Some(rest) = token.strip_prefix('#') {
                 let clean: String = rest
                     .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '\u{200C}')
                     .collect();
                 if !clean.is_empty() {
-                    let tag = format!("#{}", clean.to_ascii_lowercase());
+                    let tag = format!("#{}", clean.to_lowercase());
                     if !tags.contains(&tag) {
                         tags.push(tag);
                     }
@@ -214,9 +214,9 @@ impl Entry {
 
     pub fn has_tag(&self, tag: &str) -> bool {
         let needle = if tag.starts_with('#') {
-            tag.to_ascii_lowercase()
+            tag.to_lowercase()
         } else {
-            format!("#{}", tag.to_ascii_lowercase())
+            format!("#{}", tag.to_lowercase())
         };
         self.inline_tags().iter().any(|t| t == &needle)
     }
@@ -325,13 +325,15 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-/// Convert a human space name like "Studio & Work" to a clean filename slug "studio-work".
+/// Convert a human space name like "Studio & Work" or "مطالعه و کار" to a clean filename slug.
 pub fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
     for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
+        if ch.is_alphanumeric() {
+            for lc in ch.to_lowercase() {
+                out.push(lc);
+            }
             prev_dash = false;
         } else if !prev_dash && !out.is_empty() {
             out.push('-');
@@ -339,6 +341,40 @@ pub fn slugify(name: &str) -> String {
         }
     }
     out.trim_end_matches('-').to_string()
+}
+
+/// Returns true if a character is a strong Right-to-Left (RTL) Unicode letter
+/// (Hebrew, Arabic, Persian, Syriac, Thaana, NKo, etc.).
+pub fn is_rtl_char(c: char) -> bool {
+    let u = c as u32;
+    matches!(
+        u,
+        0x0590..=0x05FF   // Hebrew
+        | 0x0600..=0x06FF // Arabic & Persian
+        | 0x0700..=0x074F // Syriac
+        | 0x0750..=0x077F // Arabic Supplement
+        | 0x0780..=0x07BF // Thaana
+        | 0x07C0..=0x07FF // NKo
+        | 0x08A0..=0x08FF // Arabic Extended-A
+        | 0xFB1D..=0xFB4F // Hebrew Presentation Forms
+        | 0xFB50..=0xFDFF // Arabic Presentation Forms-A
+        | 0xFE70..=0xFEFF // Arabic Presentation Forms-B
+    )
+}
+
+/// Detect whether text should be treated as Right-to-Left using the Unicode BiDi
+/// "first strong directional character" heuristic (ignoring digits, punctuation,
+/// whitespace, and signifiers).
+pub fn is_rtl_text(text: &str) -> bool {
+    for c in text.chars() {
+        if is_rtl_char(c) {
+            return true;
+        }
+        if c.is_alphabetic() {
+            return false;
+        }
+    }
+    false
 }
 
 /// Parse an optional leading rapid-log modifier + signifier prefix such as
@@ -400,4 +436,32 @@ pub fn parse_rapid_input_full(
 pub fn parse_rapid_input(raw: &str, default_sig: Signifier) -> (Signifier, String) {
     let (_, sig, text) = parse_rapid_input_full(raw, default_sig);
     (sig, text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_rtl_text_accurately() {
+        assert!(is_rtl_text("سلام دنیا"));
+        assert!(is_rtl_text("1234 مطالعه کتاب #کار"));
+        assert!(is_rtl_text("مرحبا بالعالم"));
+        assert!(is_rtl_text("שלום עולם"));
+        assert!(!is_rtl_text("Finish studio lighting sketch"));
+        assert!(!is_rtl_text("Meeting about سلام at 10:00"));
+        assert!(!is_rtl_text("12345 ---"));
+    }
+
+    #[test]
+    fn slugifies_and_extracts_unicode_tags() {
+        assert_eq!(slugify("Studio & Work"), "studio-work");
+        assert_eq!(slugify("کار و مطالعه"), "کار-و-مطالعه");
+
+        let entry = Entry::new(1, "09:00", Signifier::Action, "برنامه‌ریزی #کار و #studio");
+        let tags = entry.inline_tags();
+        assert_eq!(tags, vec!["#کار".to_string(), "#studio".to_string()]);
+        assert!(entry.has_tag("#کار"));
+        assert!(entry.has_tag("studio"));
+    }
 }
