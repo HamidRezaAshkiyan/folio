@@ -96,6 +96,20 @@ impl Signifier {
         }
     }
 
+    /// Cycle base rapid-log signifier: `.` -> `o` -> `=` -> `-` -> `.`
+    pub fn cycle_base(self) -> Self {
+        match self {
+            Signifier::Action
+            | Signifier::Done
+            | Signifier::Migrated
+            | Signifier::Scheduled
+            | Signifier::Cancelled => Signifier::Event,
+            Signifier::Event => Signifier::Emotion,
+            Signifier::Emotion => Signifier::Note,
+            Signifier::Note => Signifier::Action,
+        }
+    }
+
     pub fn matches_filter(&self, filter: EntryFilter) -> bool {
         match filter {
             EntryFilter::All => true,
@@ -176,6 +190,9 @@ pub struct Entry {
     pub signifier: Signifier,
     pub text: String,
     pub paper_synced: bool,
+    /// Indentation level for nested sub-tasks / sub-notes (0..=3).
+    #[serde(default)]
+    pub indent: u8,
 }
 
 impl Entry {
@@ -192,6 +209,7 @@ impl Entry {
             signifier,
             text: text.into(),
             paper_synced: false,
+            indent: 0,
         }
     }
 
@@ -233,11 +251,21 @@ impl Entry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocKind {
     Daily,
+    MonthlyLog,
     Space,
     Review,
     FutureLog,
     Index,
     Other,
+}
+
+/// Reference to a specific entry inside any vault document (used for Batch Migration
+/// Triage and Global Carry-to-Paper queues).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultEntryRef {
+    pub rel_path: String,
+    pub doc_title: String,
+    pub entry: Entry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

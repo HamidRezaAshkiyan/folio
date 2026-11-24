@@ -1,20 +1,36 @@
 use crate::core::config::{FolioConfig, RtlMode};
+use crate::core::io::{ExportFormat, ImportFormat, export_document, import_from_file, import_from_str};
 use crate::core::markdown::serialize_markdown;
 use crate::core::model::{
-    Document, Entry, EntryFilter, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultTree,
-    is_rtl_text, parse_rapid_input_full,
+    Document, Entry, EntryFilter, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultEntryRef,
+    VaultTree, is_rtl_text, parse_rapid_input_full,
 };
 use crate::core::review::{generate_monthly_review, generate_weekly_review};
 use crate::core::vault::Vault;
 use anyhow::Result;
 use chrono::Duration;
 use iced::alignment::{Horizontal, Vertical};
+use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{
-    Column, Row, Space, button, column, container, image, row, scrollable, text, text_input,
+    Column, Row, Space, button, column, container, image, operation, row, scrollable, text,
+    text_input,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Task, Theme, window};
+use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Subscription, Task, Theme, window};
+use std::fs;
+use std::path::PathBuf;
 
 const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-128.png");
+const COMPOSER_ID: &str = "folio_composer";
+const SEARCH_ID: &str = "folio_search";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivePanel {
+    None,
+    MigrationTriage,
+    GlobalPaperQueue,
+    Reflect,
+    ImportExport,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Palette {
@@ -81,12 +97,15 @@ struct FolioApp {
     vault_tree: VaultTree,
     raw_markdown: String,
     inline_tags: Vec<String>,
+    open_triage: Vec<VaultEntryRef>,
+    global_paper: Vec<VaultEntryRef>,
     icon_handle: image::Handle,
 
-    // UI preferences
+    // UI preferences & panels
     rtl_mode: RtlMode,
     is_dark: bool,
     show_md_preview: bool,
+    active_panel: ActivePanel,
 
     // Composer state
     composer_text: String,
@@ -102,11 +121,24 @@ struct FolioApp {
     editing_text: String,
     migrating_entry_id: Option<usize>,
 
-    // New space, threading & search
+    // Manage Spaces (create + rename)
     new_space_name: String,
+    renaming_space_rel: Option<String>,
+    renaming_space_text: String,
+
+    // Threading & search
     thread_page_input: String,
     search_query: String,
     search_hits: Vec<SearchHit>,
+
+    // AM / PM Reflection inputs
+    am_focus_input: String,
+    pm_emotion_input: String,
+
+    // Import / Export inputs
+    import_path_input: String,
+    import_paste_input: String,
+    import_format: ImportFormat,
 
     // Status banner
     status_msg: Option<String>,
@@ -114,14 +146,21 @@ struct FolioApp {
 
 #[derive(Debug, Clone)]
 enum Message {
-    // Preferences
+    // Keyboard shortcuts
+    KeyPressed(Key, Modifiers),
+
+    // Preferences & Panels
     SetRtlMode(RtlMode),
+    CycleRtlMode,
     ToggleTheme,
     ToggleMdPreview,
+    TogglePanel(ActivePanel),
+    ClosePanels,
 
     // Navigation
     OpenDoc(String),
     OpenMasterIndex,
+    OpenMonthlyLog,
     NavDay(i64),
     AdjustPage(i32),
     ThreadPageChanged(String),
@@ -141,6 +180,8 @@ enum Message {
     // Entry actions
     ToggleEntryDone(usize),
     ToggleEntryCancelled(usize),
+    CycleEntrySignifier(usize),
+    IndentEntry(usize, i8),
     ToggleEntryPaper(usize),
     ToggleEntryPriority(usize),
     ToggleEntryInspiration(usize),
@@ -153,17 +194,54 @@ enum Message {
     SaveEdit,
     CancelEdit,
 
-    // Migration
+    // Migration & Future Log Month Buckets
     ToggleMigratePicker(usize),
     MigrateTo {
         entry_id: usize,
         target_rel: String,
         scheduled: bool,
     },
+    ScheduleToMonth {
+        entry_id: usize,
+        month_ym: String,
+    },
 
-    // Spaces & Search
+    // Batch Migration Triage
+    TriageAction {
+        source_rel: String,
+        entry_id: usize,
+        action: String,
+    },
+
+    // Global Carry-to-Paper Queue
+    GlobalPaperSyncOne {
+        rel_path: String,
+        entry_id: usize,
+    },
+    GlobalPaperSyncAll,
+
+    // AM / PM Reflection
+    AmFocusChanged(String),
+    SubmitAmFocus,
+    PmEmotionChanged(String),
+    SubmitPmEmotion,
+
+    // Import / Export
+    ImportPathChanged(String),
+    ImportPasteChanged(String),
+    SetImportFormat(ImportFormat),
+    RunImportFile,
+    RunImportPaste,
+    RunExport(ExportFormat),
+
+    // Manage Spaces & Search
     NewSpaceChanged(String),
     CreateSpace,
+    StartRenameSpace(String, String),
+    RenameSpaceChanged(String),
+    SaveRenameSpace,
+    CancelRenameSpace,
+    DeleteSpace(String),
     SearchChanged(String),
     ClearSearch,
 }
@@ -186,9 +264,10 @@ pub fn run_native_gui(vault: Vault, config: FolioConfig) -> Result<()> {
     )
     .title(FolioApp::title)
     .theme(FolioApp::theme)
+    .subscription(FolioApp::subscription)
     .window(window::Settings {
-        size: iced::Size::new(1260.0, 820.0),
-        min_size: Some(iced::Size::new(920.0, 620.0)),
+        size: iced::Size::new(1320.0, 840.0),
+        min_size: Some(iced::Size::new(960.0, 640.0)),
         icon,
         ..Default::default()
     })
@@ -210,6 +289,8 @@ impl FolioApp {
         });
         let raw_markdown = serialize_markdown(&doc);
         let inline_tags = doc.collect_inline_tags();
+        let open_triage = vault.collect_open_actions(today).unwrap_or_default();
+        let global_paper = vault.collect_paper_pending().unwrap_or_default();
         let rtl_mode = config.rtl_mode;
         let is_dark = config.gui_theme != "light";
 
@@ -221,10 +302,13 @@ impl FolioApp {
             vault_tree,
             raw_markdown,
             inline_tags,
+            open_triage,
+            global_paper,
             icon_handle: image::Handle::from_bytes(ICON_PNG.to_vec()),
             rtl_mode,
             is_dark,
             show_md_preview: true,
+            active_panel: ActivePanel::None,
             composer_text: String::new(),
             composer_sig: Signifier::Action,
             composer_mod: EntryModifier::None,
@@ -234,15 +318,31 @@ impl FolioApp {
             editing_text: String::new(),
             migrating_entry_id: None,
             new_space_name: String::new(),
+            renaming_space_rel: None,
+            renaming_space_text: String::new(),
             thread_page_input: String::new(),
             search_query: String::new(),
             search_hits: Vec::new(),
+            am_focus_input: String::new(),
+            pm_emotion_input: String::new(),
+            import_path_input: String::new(),
+            import_paste_input: String::new(),
+            import_format: ImportFormat::Auto,
             status_msg: None,
         }
     }
 
     fn title(&self) -> String {
         format!("Folio v{} — {}", env!("CARGO_PKG_VERSION"), self.doc.title)
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        keyboard::listen().filter_map(|event| match event {
+            keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                Some(Message::KeyPressed(key, modifiers))
+            }
+            _ => None,
+        })
     }
 
     fn theme(&self) -> Theme {
@@ -294,6 +394,20 @@ impl FolioApp {
         if let Ok(tree) = self.vault.vault_tree() {
             self.vault_tree = tree;
         }
+        if let Ok(triage) = self.vault.collect_open_actions(today) {
+            self.open_triage = triage;
+        }
+        if let Ok(paper) = self.vault.collect_paper_pending() {
+            self.global_paper = paper;
+        }
+    }
+
+    fn reload_current_doc(&mut self) {
+        let rel = self.doc.rel_path.clone();
+        if let Ok(doc) = self.vault.load_document(&rel) {
+            self.doc = doc;
+        }
+        self.refresh_metadata();
     }
 
     fn save_current_doc(&mut self) {
@@ -314,6 +428,43 @@ impl FolioApp {
         self.status_msg = None;
 
         match message {
+            Message::KeyPressed(key, mods) => {
+                let cmd = mods.command();
+                match key.as_ref() {
+                    Key::Named(Named::Escape) => {
+                        self.active_panel = ActivePanel::None;
+                        self.editing_entry_id = None;
+                        self.migrating_entry_id = None;
+                        self.renaming_space_rel = None;
+                        self.search_hits.clear();
+                    }
+                    Key::Character("n") if cmd => {
+                        return operation::focus(COMPOSER_ID);
+                    }
+                    Key::Character("f") if cmd => {
+                        return operation::focus(SEARCH_ID);
+                    }
+                    Key::Character("r") if cmd && mods.shift() => {
+                        return self.update(Message::CycleRtlMode);
+                    }
+                    Key::Character("[") if cmd => {
+                        return self.update(Message::NavDay(-1));
+                    }
+                    Key::Character("]") if cmd => {
+                        return self.update(Message::NavDay(1));
+                    }
+                    Key::Character("t") if cmd => {
+                        return self.update(Message::NavDay(0));
+                    }
+                    Key::Character("i") if cmd => {
+                        return self.update(Message::OpenMasterIndex);
+                    }
+                    Key::Character("m") if cmd => {
+                        return self.update(Message::TogglePanel(ActivePanel::MigrationTriage));
+                    }
+                    _ => {}
+                }
+            }
             Message::SetRtlMode(mode) => {
                 self.rtl_mode = mode;
                 self.persist_config();
@@ -323,12 +474,31 @@ impl FolioApp {
                     RtlMode::Ltr => "Direction: LTR (standard left-to-right)".to_string(),
                 });
             }
+            Message::CycleRtlMode => {
+                let next = match self.rtl_mode {
+                    RtlMode::Ltr => RtlMode::Auto,
+                    RtlMode::Auto => RtlMode::Rtl,
+                    RtlMode::Rtl => RtlMode::Ltr,
+                };
+                return self.update(Message::SetRtlMode(next));
+            }
             Message::ToggleTheme => {
                 self.is_dark = !self.is_dark;
                 self.persist_config();
             }
             Message::ToggleMdPreview => {
                 self.show_md_preview = !self.show_md_preview;
+            }
+            Message::TogglePanel(panel) => {
+                self.active_panel = if self.active_panel == panel {
+                    ActivePanel::None
+                } else {
+                    self.refresh_metadata();
+                    panel
+                };
+            }
+            Message::ClosePanels => {
+                self.active_panel = ActivePanel::None;
             }
             Message::OpenDoc(rel_path) => match self.vault.load_document(&rel_path) {
                 Ok(doc) => {
@@ -357,6 +527,20 @@ impl FolioApp {
                     self.status_msg = Some(format!("Master Index error: {e}"));
                 }
             },
+            Message::OpenMonthlyLog => {
+                let anchor = self.doc.date.unwrap_or_else(Vault::today_date);
+                match self.vault.open_or_create_monthly_log(anchor) {
+                    Ok(doc) => {
+                        self.doc = doc;
+                        self.editing_entry_id = None;
+                        self.migrating_entry_id = None;
+                        self.tag_filter = None;
+                        self.refresh_metadata();
+                        self.status_msg = Some("Opened Monthly Log (Calendar + Task List)".to_string());
+                    }
+                    Err(e) => self.status_msg = Some(format!("Monthly Log error: {e}")),
+                }
+            }
             Message::NavDay(delta) => {
                 let target_date = if delta == 0 {
                     Vault::today_date()
@@ -483,6 +667,21 @@ impl FolioApp {
                     self.save_current_doc();
                 }
             }
+            Message::CycleEntrySignifier(id) => {
+                if let Some(entry) = self.doc.entries.iter_mut().find(|e| e.id == id) {
+                    entry.signifier = entry.signifier.cycle_base();
+                    self.save_current_doc();
+                }
+            }
+            Message::IndentEntry(id, delta) => {
+                if let Some(entry) = self.doc.entries.iter_mut().find(|e| e.id == id) {
+                    let next = (entry.indent as i8 + delta).clamp(0, 3) as u8;
+                    if next != entry.indent {
+                        entry.indent = next;
+                        self.save_current_doc();
+                    }
+                }
+            }
             Message::ToggleEntryPaper(id) => {
                 if let Some(entry) = self.doc.entries.iter_mut().find(|e| e.id == id) {
                     entry.paper_synced = !entry.paper_synced;
@@ -516,7 +715,7 @@ impl FolioApp {
                     entry.paper_synced = true;
                 }
                 self.save_current_doc();
-                self.status_msg = Some("All entries marked carried to paper".to_string());
+                self.status_msg = Some("All entries in this doc marked carried to paper".to_string());
             }
             Message::StartEdit(id, text_val) => {
                 self.editing_entry_id = Some(id);
@@ -567,6 +766,160 @@ impl FolioApp {
                     Err(e) => self.status_msg = Some(format!("Migration failed: {e}")),
                 }
             }
+            Message::ScheduleToMonth { entry_id, month_ym } => {
+                match self
+                    .vault
+                    .schedule_to_future_month(&mut self.doc, entry_id, &month_ym)
+                {
+                    Ok(()) => {
+                        self.migrating_entry_id = None;
+                        self.refresh_metadata();
+                        self.status_msg =
+                            Some(format!("Scheduled entry to Future Log [{month_ym}]"));
+                    }
+                    Err(e) => self.status_msg = Some(format!("Schedule failed: {e}")),
+                }
+            }
+            Message::TriageAction {
+                source_rel,
+                entry_id,
+                action,
+            } => {
+                let today = Vault::today_date();
+                match self.vault.triage_open_action(
+                    &source_rel,
+                    entry_id,
+                    &action,
+                    today,
+                    self.config.notebook_page,
+                ) {
+                    Ok(()) => {
+                        self.reload_current_doc();
+                        self.status_msg = Some(format!("Triaged task ({action})"));
+                    }
+                    Err(e) => self.status_msg = Some(format!("Triage error: {e}")),
+                }
+            }
+            Message::GlobalPaperSyncOne { rel_path, entry_id } => {
+                match self.vault.mark_entry_paper_synced(&rel_path, entry_id, true) {
+                    Ok(()) => {
+                        self.reload_current_doc();
+                        self.status_msg = Some("Marked entry carried to paper".to_string());
+                    }
+                    Err(e) => self.status_msg = Some(format!("Paper sync error: {e}")),
+                }
+            }
+            Message::GlobalPaperSyncAll => match self.vault.mark_all_vault_paper_synced() {
+                Ok(n) => {
+                    self.reload_current_doc();
+                    self.status_msg =
+                        Some(format!("Marked {n} entries across vault carried to paper"));
+                }
+                Err(e) => self.status_msg = Some(format!("Paper sync error: {e}")),
+            },
+            Message::AmFocusChanged(v) => self.am_focus_input = v,
+            Message::SubmitAmFocus => {
+                let txt = self.am_focus_input.trim().to_string();
+                if !txt.is_empty() {
+                    let today = Vault::today_date();
+                    if let Ok(mut daily) =
+                        self.vault.open_or_create_daily(today, self.config.notebook_page)
+                    {
+                        daily.add_entry_with_modifier(
+                            Vault::now_hhmm(),
+                            EntryModifier::Priority,
+                            Signifier::Action,
+                            txt,
+                        );
+                        let _ = self.vault.save_document(&daily);
+                        self.am_focus_input.clear();
+                        self.reload_current_doc();
+                        self.status_msg = Some("Added AM priority focus (*. ) to Today".to_string());
+                    }
+                }
+            }
+            Message::PmEmotionChanged(v) => self.pm_emotion_input = v,
+            Message::SubmitPmEmotion => {
+                let txt = self.pm_emotion_input.trim().to_string();
+                if !txt.is_empty() {
+                    let today = Vault::today_date();
+                    if let Ok(mut daily) =
+                        self.vault.open_or_create_daily(today, self.config.notebook_page)
+                    {
+                        daily.add_entry_with_modifier(
+                            Vault::now_hhmm(),
+                            EntryModifier::None,
+                            Signifier::Emotion,
+                            txt,
+                        );
+                        let _ = self.vault.save_document(&daily);
+                        self.pm_emotion_input.clear();
+                        self.reload_current_doc();
+                        self.status_msg = Some("Logged PM reflection (= ) to Today".to_string());
+                    }
+                }
+            }
+            Message::ImportPathChanged(v) => self.import_path_input = v,
+            Message::ImportPasteChanged(v) => self.import_paste_input = v,
+            Message::SetImportFormat(fmt) => self.import_format = fmt,
+            Message::RunImportFile => {
+                let raw_path = self.import_path_input.trim();
+                if !raw_path.is_empty() {
+                    let expanded = crate::core::config::expand_tilde(PathBuf::from(raw_path));
+                    match import_from_file(&expanded, self.import_format, &mut self.doc) {
+                        Ok(n) => {
+                            self.import_path_input.clear();
+                            self.save_current_doc();
+                            self.status_msg = Some(format!(
+                                "Imported {n} entries from {}",
+                                expanded.display()
+                            ));
+                        }
+                        Err(e) => self.status_msg = Some(format!("Import failed: {e}")),
+                    }
+                }
+            }
+            Message::RunImportPaste => {
+                let raw = self.import_paste_input.clone();
+                if !raw.trim().is_empty() {
+                    match import_from_str(&raw, self.import_format, &mut self.doc) {
+                        Ok(n) => {
+                            self.import_paste_input.clear();
+                            self.save_current_doc();
+                            self.status_msg = Some(format!("Imported {n} entries from text"));
+                        }
+                        Err(e) => self.status_msg = Some(format!("Import failed: {e}")),
+                    }
+                }
+            }
+            Message::RunExport(fmt) => {
+                let ext = match fmt {
+                    ExportFormat::Markdown => "md",
+                    ExportFormat::Json => "json",
+                    ExportFormat::Csv => "csv",
+                };
+                match export_document(&self.doc, fmt) {
+                    Ok(content) => {
+                        let exports_dir = self.vault.root.join("Exports");
+                        let _ = fs::create_dir_all(&exports_dir);
+                        let stem = self
+                            .doc
+                            .path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("folio");
+                        let out_path = exports_dir.join(format!("{stem}.{ext}"));
+                        match fs::write(&out_path, content) {
+                            Ok(()) => {
+                                self.status_msg =
+                                    Some(format!("Exported to {}", out_path.display()));
+                            }
+                            Err(e) => self.status_msg = Some(format!("Export write failed: {e}")),
+                        }
+                    }
+                    Err(e) => self.status_msg = Some(format!("Export failed: {e}")),
+                }
+            }
             Message::NewSpaceChanged(val) => {
                 self.new_space_name = val;
             }
@@ -584,6 +937,50 @@ impl FolioApp {
                     }
                 }
             }
+            Message::StartRenameSpace(rel, current_name) => {
+                self.renaming_space_rel = Some(rel);
+                self.renaming_space_text = current_name;
+            }
+            Message::RenameSpaceChanged(v) => {
+                self.renaming_space_text = v;
+            }
+            Message::SaveRenameSpace => {
+                if let Some(old_rel) = self.renaming_space_rel.take() {
+                    let new_name = self.renaming_space_text.trim().to_string();
+                    self.renaming_space_text.clear();
+                    if !new_name.is_empty() {
+                        match self.vault.rename_space(&old_rel, &new_name) {
+                            Ok(doc) => {
+                                if self.doc.rel_path == old_rel {
+                                    self.doc = doc;
+                                }
+                                self.refresh_metadata();
+                                self.status_msg = Some(format!("Renamed space to '{new_name}'"));
+                            }
+                            Err(e) => self.status_msg = Some(format!("Rename failed: {e}")),
+                        }
+                    }
+                }
+            }
+            Message::CancelRenameSpace => {
+                self.renaming_space_rel = None;
+                self.renaming_space_text.clear();
+            }
+            Message::DeleteSpace(rel_path) => match self.vault.delete_space(&rel_path) {
+                Ok(()) => {
+                    if self.doc.rel_path == rel_path {
+                        let today = Vault::today_date();
+                        if let Ok(daily) =
+                            self.vault.open_or_create_daily(today, self.config.notebook_page)
+                        {
+                            self.doc = daily;
+                        }
+                    }
+                    self.refresh_metadata();
+                    self.status_msg = Some(format!("Deleted space {rel_path}"));
+                }
+                Err(e) => self.status_msg = Some(format!("Delete failed: {e}")),
+            },
             Message::SearchChanged(q) => {
                 self.search_query = q.clone();
                 if q.trim().is_empty() {
@@ -620,10 +1017,26 @@ impl FolioApp {
                 .height(Length::Fill)
         };
 
-        let mut root_col = column![top_bar].spacing(10);
+        let mut root_col = column![top_bar].spacing(8);
 
         if !self.search_hits.is_empty() {
             root_col = root_col.push(self.view_search_results(p, ui_rtl));
+        }
+
+        match self.active_panel {
+            ActivePanel::MigrationTriage => {
+                root_col = root_col.push(self.view_triage_panel(p, ui_rtl));
+            }
+            ActivePanel::GlobalPaperQueue => {
+                root_col = root_col.push(self.view_global_paper_panel(p, ui_rtl));
+            }
+            ActivePanel::Reflect => {
+                root_col = root_col.push(self.view_reflect_panel(p, ui_rtl));
+            }
+            ActivePanel::ImportExport => {
+                root_col = root_col.push(self.view_import_export_panel(p, ui_rtl));
+            }
+            ActivePanel::None => {}
         }
 
         if let Some(msg) = &self.status_msg {
@@ -642,7 +1055,7 @@ impl FolioApp {
 
         root_col = root_col.push(body);
 
-        // Footer status bar with version, vault root, and direction mode
+        // Footer status bar with version, shortcuts hint, vault root, and direction mode
         let footer = container(
             row![
                 text(format!("Folio v{}", env!("CARGO_PKG_VERSION")))
@@ -653,8 +1066,11 @@ impl FolioApp {
                     .color(p.on_surface_variant)
                     .shaping(text::Shaping::Advanced),
                 Space::new().width(Length::Fill),
+                text("Shortcuts: ⌘N Log · ⌘F Search · ⌘[ / ⌘] Day · ⌘T Today · ⌘I Index · ⌘M Triage · ⌘⇧R RTL")
+                    .size(10)
+                    .color(p.on_surface_variant),
                 text(format!(
-                    "Dir: {} · {}",
+                    "· Dir: {} · {}",
                     self.rtl_mode.label(),
                     if self.is_dark { "Dark" } else { "Light" }
                 ))
@@ -673,7 +1089,7 @@ impl FolioApp {
         container(root_col)
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding(12)
+            .padding(10)
             .style(move |_| container::Style {
                 background: Some(p.surface.into()),
                 ..Default::default()
@@ -695,28 +1111,22 @@ impl FolioApp {
         .padding([2, 6])
         .style(move |_| badge_style(p));
 
-        let path_label = text(self.vault.display_doc_path(&self.doc.rel_path))
-            .size(11)
-            .color(p.on_surface_variant)
-            .shaping(text::Shaping::Advanced);
-
         let brand_group = if ui_rtl {
-            row![path_label, version_badge, brand_title, icon_img]
-                .spacing(8)
+            row![version_badge, brand_title, icon_img]
+                .spacing(6)
                 .align_y(Alignment::Center)
         } else {
-            row![icon_img, brand_title, version_badge, path_label]
-                .spacing(8)
+            row![icon_img, brand_title, version_badge]
+                .spacing(6)
                 .align_y(Alignment::Center)
         };
 
-        // RTL mode segmented toggle: LTR | AUTO | RTL
         let rtl_toggle = row![
             self.rtl_pill(p, RtlMode::Ltr),
             self.rtl_pill(p, RtlMode::Auto),
             self.rtl_pill(p, RtlMode::Rtl),
         ]
-        .spacing(3)
+        .spacing(2)
         .align_y(Alignment::Center);
 
         let theme_btn = pill_button(
@@ -727,79 +1137,110 @@ impl FolioApp {
         );
 
         let day_nav = row![
-            pill_button("‹ Prev", false, p, Message::NavDay(-1)),
+            pill_button("‹", false, p, Message::NavDay(-1)),
             pill_button("Today", false, p, Message::NavDay(0)),
-            pill_button("Next ›", false, p, Message::NavDay(1)),
+            pill_button("›", false, p, Message::NavDay(1)),
         ]
-        .spacing(4);
+        .spacing(3);
 
         let page_num = self.doc.page.unwrap_or(self.config.notebook_page);
         let page_ctrl = row![
             pill_button("-", false, p, Message::AdjustPage(-1)),
             container(text(format!("p.{page_num}")).size(11).color(p.tertiary))
-                .padding([3, 7])
+                .padding([3, 6])
                 .style(move |_| badge_style(p)),
             pill_button("+", false, p, Message::AdjustPage(1)),
         ]
-        .spacing(3)
+        .spacing(2)
         .align_y(Alignment::Center);
 
-        let reviews = row![
+        let triage_label = if self.open_triage.is_empty() {
+            "Triage".to_string()
+        } else {
+            format!("Triage ({})", self.open_triage.len())
+        };
+
+        let bujo_nav = row![
             pill_button(
                 "Index",
                 self.doc.rel_path.eq_ignore_ascii_case("Index.md"),
                 p,
                 Message::OpenMasterIndex,
             ),
+            pill_button(
+                "Monthly",
+                self.doc.rel_path.ends_with("-monthly.md"),
+                p,
+                Message::OpenMonthlyLog,
+            ),
+            pill_button(
+                &triage_label,
+                self.active_panel == ActivePanel::MigrationTriage,
+                p,
+                Message::TogglePanel(ActivePanel::MigrationTriage),
+            ),
+            pill_button(
+                "Reflect",
+                self.active_panel == ActivePanel::Reflect,
+                p,
+                Message::TogglePanel(ActivePanel::Reflect),
+            ),
             pill_button("Weekly", false, p, Message::GenerateReview(true)),
-            pill_button("Monthly", false, p, Message::GenerateReview(false)),
+            pill_button("M.Rev", false, p, Message::GenerateReview(false)),
+            pill_button(
+                "I/O",
+                self.active_panel == ActivePanel::ImportExport,
+                p,
+                Message::TogglePanel(ActivePanel::ImportExport),
+            ),
         ]
-        .spacing(4);
+        .spacing(3);
 
         let search_input = text_input("Search vault or #tag...", &self.search_query)
+            .id(SEARCH_ID)
             .on_input(Message::SearchChanged)
-            .size(12)
+            .size(11)
             .padding([4, 8])
-            .width(Length::Fixed(185.0))
+            .width(Length::Fixed(165.0))
             .style(move |_, status| input_style(p, status));
 
         let controls = if ui_rtl {
             row![
                 search_input,
-                reviews,
+                bujo_nav,
                 page_ctrl,
                 day_nav,
                 theme_btn,
                 rtl_toggle,
             ]
-            .spacing(8)
+            .spacing(6)
             .align_y(Alignment::Center)
         } else {
             row![
                 day_nav,
                 page_ctrl,
-                reviews,
+                bujo_nav,
                 rtl_toggle,
                 theme_btn,
                 search_input,
             ]
-            .spacing(8)
+            .spacing(6)
             .align_y(Alignment::Center)
         };
 
         let bar_row = if ui_rtl {
             row![controls, Space::new().width(Length::Fill), brand_group]
-                .spacing(12)
+                .spacing(10)
                 .align_y(Alignment::Center)
         } else {
             row![brand_group, Space::new().width(Length::Fill), controls]
-                .spacing(12)
+                .spacing(10)
                 .align_y(Alignment::Center)
         };
 
         container(bar_row)
             .width(Length::Fill)
-            .padding([8, 12])
+            .padding([7, 10])
             .style(move |_| pane_style(p.surface_low, p.outline_variant))
             .into()
     }
@@ -807,6 +1248,310 @@ impl FolioApp {
     fn rtl_pill(&self, p: Palette, mode: RtlMode) -> Element<'_, Message> {
         let active = self.rtl_mode == mode;
         pill_button(mode.label(), active, p, Message::SetRtlMode(mode))
+    }
+
+    fn view_triage_panel(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+        let mut col = Column::new().spacing(6);
+        let head = row![
+            text(format!(
+                "Batch Migration Triage — {} open actions from past Daily & Monthly logs",
+                self.open_triage.len()
+            ))
+            .size(12)
+            .color(p.tertiary),
+            Space::new().width(Length::Fill),
+            pill_button("Close", false, p, Message::ClosePanels),
+        ]
+        .align_y(Alignment::Center);
+        col = col.push(head);
+
+        if self.open_triage.is_empty() {
+            col = col.push(
+                text("All caught up! No open (.) actions left in past Daily Notes or Monthly Logs.")
+                    .size(12)
+                    .color(p.on_surface_variant),
+            );
+        } else {
+            let mut list = Column::new().spacing(4);
+            for item in &self.open_triage {
+                let is_rtl = self.is_text_rtl(&item.entry.text);
+                let src = text(format!("[{}]", item.doc_title))
+                    .size(11)
+                    .color(p.on_surface_variant);
+                let body = text(item.entry.text.clone())
+                    .size(12)
+                    .color(p.on_surface)
+                    .shaping(text::Shaping::Advanced)
+                    .width(Length::Fill)
+                    .align_x(if is_rtl || ui_rtl {
+                        Horizontal::Right
+                    } else {
+                        Horizontal::Left
+                    });
+                let btns = row![
+                    mini_btn(
+                        "> Today",
+                        true,
+                        p,
+                        Message::TriageAction {
+                            source_rel: item.rel_path.clone(),
+                            entry_id: item.entry.id,
+                            action: "today".into(),
+                        },
+                    ),
+                    mini_btn(
+                        "< Future",
+                        false,
+                        p,
+                        Message::TriageAction {
+                            source_rel: item.rel_path.clone(),
+                            entry_id: item.entry.id,
+                            action: "future".into(),
+                        },
+                    ),
+                    mini_btn(
+                        "× Done",
+                        false,
+                        p,
+                        Message::TriageAction {
+                            source_rel: item.rel_path.clone(),
+                            entry_id: item.entry.id,
+                            action: "done".into(),
+                        },
+                    ),
+                    mini_btn(
+                        "~ Cancel",
+                        false,
+                        p,
+                        Message::TriageAction {
+                            source_rel: item.rel_path.clone(),
+                            entry_id: item.entry.id,
+                            action: "cancel".into(),
+                        },
+                    ),
+                ]
+                .spacing(4);
+
+                list = list.push(
+                    container(
+                        row![src, body, btns]
+                            .spacing(8)
+                            .align_y(Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding([5, 8])
+                    .style(move |_| pane_style(p.surface_container, p.outline_variant)),
+                );
+            }
+            col = col.push(scrollable(list).height(Length::Fixed(185.0)));
+        }
+
+        container(col)
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| pane_style(p.surface_low, p.tertiary))
+            .into()
+    }
+
+    fn view_global_paper_panel(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+        let mut col = Column::new().spacing(6);
+        let head = row![
+            text(format!(
+                "Global Carry-to-Paper Queue — {} entries across vault waiting for notebook",
+                self.global_paper.len()
+            ))
+            .size(12)
+            .color(p.secondary),
+            Space::new().width(Length::Fill),
+            pill_button("Mark Entire Vault Synced", true, p, Message::GlobalPaperSyncAll),
+            pill_button("Close", false, p, Message::ClosePanels),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        col = col.push(head);
+
+        if self.global_paper.is_empty() {
+            col = col.push(
+                text("Every entry in your vault is synced to paper ([paper:ok])!")
+                    .size(12)
+                    .color(p.tertiary),
+            );
+        } else {
+            let mut list = Column::new().spacing(4);
+            for item in &self.global_paper {
+                let is_rtl = self.is_text_rtl(&item.entry.text);
+                let src = text(format!("[{}] {}", item.doc_title, item.entry.signifier.symbol()))
+                    .size(11)
+                    .color(p.on_surface_variant);
+                let body = text(item.entry.text.clone())
+                    .size(12)
+                    .color(p.on_surface)
+                    .shaping(text::Shaping::Advanced)
+                    .width(Length::Fill)
+                    .align_x(if is_rtl || ui_rtl {
+                        Horizontal::Right
+                    } else {
+                        Horizontal::Left
+                    });
+                let ok_btn = mini_btn(
+                    "✓ Copied",
+                    true,
+                    p,
+                    Message::GlobalPaperSyncOne {
+                        rel_path: item.rel_path.clone(),
+                        entry_id: item.entry.id,
+                    },
+                );
+                list = list.push(
+                    container(row![src, body, ok_btn].spacing(8).align_y(Alignment::Center))
+                        .width(Length::Fill)
+                        .padding([5, 8])
+                        .style(move |_| pane_style(p.surface_container, p.outline_variant)),
+                );
+            }
+            col = col.push(scrollable(list).height(Length::Fixed(185.0)));
+        }
+
+        container(col)
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| pane_style(p.surface_low, p.secondary))
+            .into()
+    }
+
+    fn view_reflect_panel(&self, p: Palette, _ui_rtl: bool) -> Element<'_, Message> {
+        let head = row![
+            text("AM / PM Reflection (BuJo Daily Ritual)")
+                .size(12)
+                .color(p.primary),
+            Space::new().width(Length::Fill),
+            pill_button("Close", false, p, Message::ClosePanels),
+        ]
+        .align_y(Alignment::Center);
+
+        let am_in = text_input(
+            "AM: What matters most today? (logs as priority `*. ` action in Today)",
+            &self.am_focus_input,
+        )
+        .on_input(Message::AmFocusChanged)
+        .on_submit(Message::SubmitAmFocus)
+        .size(12)
+        .padding([5, 8])
+        .style(move |_, status| input_style(p, status));
+        let am_row = row![
+            text("AM Focus").size(11).color(p.tertiary).width(Length::Fixed(72.0)),
+            am_in,
+            pill_button("+ Priority", true, p, Message::SubmitAmFocus),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        let pm_in = text_input(
+            "PM: How did today feel or what stood out? (logs as `= ` emotion in Today)",
+            &self.pm_emotion_input,
+        )
+        .on_input(Message::PmEmotionChanged)
+        .on_submit(Message::SubmitPmEmotion)
+        .size(12)
+        .padding([5, 8])
+        .style(move |_, status| input_style(p, status));
+        let pm_row = row![
+            text("PM Reflect").size(11).color(p.secondary).width(Length::Fixed(72.0)),
+            pm_in,
+            pill_button("+ Emotion", true, p, Message::SubmitPmEmotion),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        let checklist = row![
+            text(format!(
+                "Evening checklist: {} open tasks to triage · {} entries pending Carry to Paper",
+                self.open_triage.len(),
+                self.global_paper.len()
+            ))
+            .size(11)
+            .color(p.on_surface_variant),
+            Space::new().width(Length::Fill),
+            pill_button(
+                "Open Triage",
+                false,
+                p,
+                Message::TogglePanel(ActivePanel::MigrationTriage),
+            ),
+            pill_button(
+                "Paper Queue",
+                false,
+                p,
+                Message::TogglePanel(ActivePanel::GlobalPaperQueue),
+            ),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        container(column![head, am_row, pm_row, checklist].spacing(6))
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| pane_style(p.surface_low, p.primary))
+            .into()
+    }
+
+    fn view_import_export_panel(&self, p: Palette, _ui_rtl: bool) -> Element<'_, Message> {
+        let head = row![
+            text("Import & Export (Obsidian / Markdown / Apple Notes / JSON / CSV)")
+                .size(12)
+                .color(p.primary),
+            Space::new().width(Length::Fill),
+            pill_button("Close", false, p, Message::ClosePanels),
+        ]
+        .align_y(Alignment::Center);
+
+        let fmt_row = row![
+            text("Format:").size(11).color(p.on_surface_variant),
+            pill_button("Auto", self.import_format == ImportFormat::Auto, p, Message::SetImportFormat(ImportFormat::Auto)),
+            pill_button("Markdown", self.import_format == ImportFormat::Markdown, p, Message::SetImportFormat(ImportFormat::Markdown)),
+            pill_button("JSON", self.import_format == ImportFormat::Json, p, Message::SetImportFormat(ImportFormat::Json)),
+            pill_button("CSV", self.import_format == ImportFormat::Csv, p, Message::SetImportFormat(ImportFormat::Csv)),
+            pill_button("Text", self.import_format == ImportFormat::Text, p, Message::SetImportFormat(ImportFormat::Text)),
+            Space::new().width(Length::Fill),
+            text("Export current doc:").size(11).color(p.on_surface_variant),
+            pill_button("Export .md", false, p, Message::RunExport(ExportFormat::Markdown)),
+            pill_button("Export .json", false, p, Message::RunExport(ExportFormat::Json)),
+            pill_button("Export .csv", false, p, Message::RunExport(ExportFormat::Csv)),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+
+        let file_in = text_input("Import from file path (e.g. ~/Desktop/notes.md)...", &self.import_path_input)
+            .on_input(Message::ImportPathChanged)
+            .on_submit(Message::RunImportFile)
+            .size(12)
+            .padding([5, 8])
+            .style(move |_, status| input_style(p, status));
+        let file_row = row![
+            file_in,
+            pill_button("Import File", true, p, Message::RunImportFile),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        let paste_in = text_input("Or paste Markdown / checklists / JSON / CSV lines here...", &self.import_paste_input)
+            .on_input(Message::ImportPasteChanged)
+            .on_submit(Message::RunImportPaste)
+            .size(12)
+            .padding([5, 8])
+            .style(move |_, status| input_style(p, status));
+        let paste_row = row![
+            paste_in,
+            pill_button("Import Pasted", true, p, Message::RunImportPaste),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        container(column![head, fmt_row, file_row, paste_row].spacing(6))
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| pane_style(p.surface_low, p.primary))
+            .into()
     }
 
     fn view_search_results(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
@@ -852,14 +1597,33 @@ impl FolioApp {
     }
 
     fn view_nav_pane(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
-        // [1] SPACES
+        // [1] SPACES (with Manage Spaces: Rename + Delete)
         let mut spaces_col = Column::new().spacing(4);
         spaces_col = spaces_col.push(section_header("[1] SPACES", p.primary, ui_rtl));
 
         for sp in &self.spaces {
+            if self.renaming_space_rel.as_deref() == Some(sp.rel_path.as_str()) {
+                let ren_in = text_input("Rename space...", &self.renaming_space_text)
+                    .on_input(Message::RenameSpaceChanged)
+                    .on_submit(Message::SaveRenameSpace)
+                    .size(11)
+                    .padding([3, 6])
+                    .style(move |_, status| input_style(p, status));
+                spaces_col = spaces_col.push(
+                    row![
+                        ren_in,
+                        mini_btn("OK", true, p, Message::SaveRenameSpace),
+                        mini_btn("×", false, p, Message::CancelRenameSpace),
+                    ]
+                    .spacing(3)
+                    .align_y(Alignment::Center),
+                );
+                continue;
+            }
+
             let active = self.doc.rel_path == sp.rel_path;
             let count_txt = text(format!("{}", sp.entry_count))
-                .size(11)
+                .size(10)
                 .color(if active {
                     p.primary
                 } else {
@@ -878,13 +1642,30 @@ impl FolioApp {
                     .align_y(Alignment::Center)
             };
 
-            spaces_col = spaces_col.push(
-                button(item_row)
-                    .width(Length::Fill)
-                    .padding([5, 8])
-                    .style(move |_, status| list_item_style(p, active, status))
-                    .on_press(Message::OpenDoc(sp.rel_path.clone())),
-            );
+            let open_btn = button(item_row)
+                .width(Length::Fill)
+                .padding([4, 6])
+                .style(move |_, status| list_item_style(p, active, status))
+                .on_press(Message::OpenDoc(sp.rel_path.clone()));
+
+            if sp.is_daily {
+                spaces_col = spaces_col.push(open_btn);
+            } else {
+                spaces_col = spaces_col.push(
+                    row![
+                        open_btn,
+                        mini_btn(
+                            "✎",
+                            false,
+                            p,
+                            Message::StartRenameSpace(sp.rel_path.clone(), sp.name.clone()),
+                        ),
+                        mini_btn("×", false, p, Message::DeleteSpace(sp.rel_path.clone())),
+                    ]
+                    .spacing(2)
+                    .align_y(Alignment::Center),
+                );
+            }
         }
 
         // New Space creator
@@ -980,7 +1761,7 @@ impl FolioApp {
 
         column![spaces_card, vault_card]
             .spacing(10)
-            .width(Length::Fixed(245.0))
+            .width(Length::Fixed(248.0))
             .height(Length::Fill)
             .into()
     }
@@ -1082,7 +1863,7 @@ impl FolioApp {
 
         let mut entries_col = Column::new().spacing(4);
 
-        // Prose lines (for Reviews / Future Log)
+        // Prose lines (for Reviews / Monthly Log / Future Log / Index)
         if !self.doc.prose_lines.is_empty() {
             let mut prose_box = Column::new().spacing(3);
             for line in &self.doc.prose_lines {
@@ -1113,12 +1894,16 @@ impl FolioApp {
         if filtered_entries.is_empty() {
             entries_col = entries_col.push(
                 container(
-                    text("No entries yet. Use the rapid-log bar above to add one (e.g. `. Finish sketch` or Persian/Arabic text).")
+                    text("No entries yet. Press ⌘N / Ctrl+N or use the rapid-log bar above to add one.")
                         .size(12)
                         .color(p.on_surface_variant)
                         .shaping(text::Shaping::Advanced)
                         .width(Length::Fill)
-                        .align_x(if ui_rtl { Horizontal::Right } else { Horizontal::Left }),
+                        .align_x(if ui_rtl {
+                            Horizontal::Right
+                        } else {
+                            Horizontal::Left
+                        }),
                 )
                 .padding(16),
             );
@@ -1191,10 +1976,11 @@ impl FolioApp {
         let placeholder = if ui_rtl {
             "ثبت سریع... (یا . برای کار، o برای رویداد، = برای حس، - برای یادداشت)"
         } else {
-            "Rapid log... (prefix `. `, `o `, `= `, `- `, `*. `, `!- ` or type RTL directly)"
+            "Rapid log (⌘N)... prefix `. `, `o `, `= `, `- `, `*. `, `!- ` or type RTL directly"
         };
 
         let input = text_input(placeholder, &self.composer_text)
+            .id(COMPOSER_ID)
             .on_input(Message::ComposerChanged)
             .on_submit(Message::SubmitEntry)
             .size(13)
@@ -1235,6 +2021,7 @@ impl FolioApp {
 
     fn view_entry_row(&self, entry: &Entry, p: Palette) -> Element<'_, Message> {
         let entry_rtl = self.is_text_rtl(&entry.text);
+        let indent_px = (entry.indent.min(3) as f32) * 20.0;
 
         if self.editing_entry_id == Some(entry.id) {
             let edit_in = text_input("Edit entry...", &self.editing_text)
@@ -1326,6 +2113,9 @@ impl FolioApp {
 
         let paper_label = if entry.paper_synced { "ok" } else { "paper" };
         let actions = row![
+            mini_btn("↻", false, p, Message::CycleEntrySignifier(entry.id)),
+            mini_btn("←", false, p, Message::IndentEntry(entry.id, -1)),
+            mini_btn("→", false, p, Message::IndentEntry(entry.id, 1)),
             mini_btn(
                 "~",
                 entry.signifier == Signifier::Cancelled,
@@ -1364,7 +2154,7 @@ impl FolioApp {
             ),
             mini_btn("×", false, p, Message::DeleteEntry(entry.id)),
         ]
-        .spacing(3)
+        .spacing(2)
         .align_y(Alignment::Center);
 
         let entry_row = if entry_rtl {
@@ -1377,9 +2167,25 @@ impl FolioApp {
                 .align_y(Alignment::Center)
         };
 
+        let pad = if entry_rtl {
+            Padding {
+                top: 5.0,
+                right: 8.0 + indent_px,
+                bottom: 5.0,
+                left: 8.0,
+            }
+        } else {
+            Padding {
+                top: 5.0,
+                right: 8.0,
+                bottom: 5.0,
+                left: 8.0 + indent_px,
+            }
+        };
+
         container(entry_row)
             .width(Length::Fill)
-            .padding([5, 8])
+            .padding(pad)
             .style(move |_| container::Style {
                 background: Some(p.surface_low.into()),
                 border: Border {
@@ -1396,9 +2202,9 @@ impl FolioApp {
         let base_date = self.doc.date.unwrap_or_else(Vault::today_date);
         let tomorrow_rel = Vault::daily_rel_path(base_date + Duration::days(1));
 
-        let mut bar = Row::new().spacing(5).align_y(Alignment::Center);
+        let mut bar = Row::new().spacing(4).align_y(Alignment::Center);
         bar = bar.push(
-            text("Migrate to:")
+            text("Migrate / Schedule:")
                 .size(11)
                 .color(p.tertiary)
                 .shaping(text::Shaping::Advanced),
@@ -1413,16 +2219,19 @@ impl FolioApp {
                 scheduled: false,
             },
         ));
-        bar = bar.push(pill_button(
-            "Future Log (<)",
-            false,
-            p,
-            Message::MigrateTo {
-                entry_id,
-                target_rel: "Future Log.md".to_string(),
-                scheduled: true,
-            },
-        ));
+
+        // Structured Future Log month buckets (next 3 months)
+        for ym in Vault::upcoming_months(Vault::today_date(), 4).into_iter().skip(1) {
+            bar = bar.push(pill_button(
+                &format!("{ym} (<)"),
+                false,
+                p,
+                Message::ScheduleToMonth {
+                    entry_id,
+                    month_ym: ym,
+                },
+            ));
+        }
 
         for sp in &self.spaces {
             if !sp.is_daily && sp.rel_path != self.doc.rel_path {
@@ -1466,7 +2275,7 @@ impl FolioApp {
             ("!", "Inspiration modifier"),
         ];
 
-        let mut sig_col = Column::new().spacing(3);
+        let mut sig_col = Column::new().spacing(2);
         sig_col = sig_col.push(section_header("[4] SIGNIFIERS", p.primary, ui_rtl));
         for (sym, desc) in sig_lines {
             let s = text(sym).size(12).color(p.primary).width(Length::Fixed(16.0));
@@ -1484,38 +2293,58 @@ impl FolioApp {
             .padding(10)
             .style(move |_| pane_style(p.surface_low, p.outline_variant));
 
-        // [5] CARRY TO PAPER
+        // [5] CARRY TO PAPER (Current doc + Global Vault Queue)
         let pending = self.doc.paper_pending_count();
         let synced = self.doc.entries.len().saturating_sub(pending);
-        let paper_summary = text(format!("{pending} to copy · {synced} on paper"))
-            .size(12)
-            .color(if pending > 0 { p.secondary } else { p.tertiary })
-            .width(Length::Fill)
-            .align_x(if ui_rtl {
-                Horizontal::Right
-            } else {
-                Horizontal::Left
-            });
+        let global_pending = self.global_paper.len();
+        let paper_summary = text(format!(
+            "Doc: {pending} pending · {synced} ok\nVault total: {global_pending} pending"
+        ))
+        .size(11)
+        .color(if global_pending > 0 {
+            p.secondary
+        } else {
+            p.tertiary
+        })
+        .width(Length::Fill)
+        .align_x(if ui_rtl {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        });
 
         let mark_all_btn = button(
-            text("Mark All Copied to Paper")
+            text("Mark Doc Synced")
                 .size(11)
                 .color(p.on_primary)
                 .width(Length::Fill)
                 .align_x(Horizontal::Center),
         )
         .width(Length::Fill)
-        .padding([6, 8])
+        .padding([5, 8])
         .style(move |_, status| primary_btn_style(p, status))
         .on_press(Message::MarkAllPaperSynced);
+
+        let global_queue_btn = button(
+            text(format!("Global Paper Queue ({global_pending})"))
+                .size(11)
+                .color(p.on_surface)
+                .width(Length::Fill)
+                .align_x(Horizontal::Center),
+        )
+        .width(Length::Fill)
+        .padding([5, 8])
+        .style(move |_, status| secondary_btn_style(p, status))
+        .on_press(Message::TogglePanel(ActivePanel::GlobalPaperQueue));
 
         let paper_card = container(
             column![
                 section_header("[5] CARRY TO PAPER", p.secondary, ui_rtl),
                 paper_summary,
                 mark_all_btn,
+                global_queue_btn,
             ]
-            .spacing(8),
+            .spacing(6),
         )
         .width(Length::Fill)
         .padding(10)
@@ -1597,7 +2426,7 @@ fn pill_button<'a>(
             .color(if active { p.on_primary } else { p.on_surface })
             .shaping(text::Shaping::Advanced),
     )
-    .padding([4, 8])
+    .padding([4, 7])
     .style(move |_, status| {
         if active {
             primary_btn_style(p, status)
@@ -1620,7 +2449,7 @@ fn mini_btn<'a>(label: &str, active: bool, p: Palette, msg: Message) -> Element<
             })
             .align_y(Vertical::Center),
     )
-    .padding([2, 5])
+    .padding([2, 4])
     .style(move |_, status| {
         if active {
             primary_btn_style(p, status)
