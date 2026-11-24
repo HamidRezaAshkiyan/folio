@@ -1,0 +1,1851 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Folio — Bullet Journal Companion (TUI + Web GUI + Obsidian Markdown)</title>
+  <meta name="description" content="Minimalistic, cross-platform Bullet Journal (BuJo) companion app with a Ratatui TUI and embedded local Web GUI, backed by plain Obsidian-compatible Markdown files.">
+  <meta property="og:title" content="Folio — Rapid Logging for Your Physical Notebook">
+  <meta property="og:description" content="Single-binary Rust Bullet Journal companion with a 6-pane Ratatui TUI, embedded Web GUI, Carry to Paper queue, and Obsidian-compatible Markdown.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://hamidrezaashkiyan.github.io/folio/">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2315130E' stroke='%23B1C7F1' stroke-width='3'/%3E%3Ccircle cx='22' cy='22' r='4.5' fill='%23B1C7F1'/%3E%3Cline x1='32' y1='22' x2='48' y2='22' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='34' r='4.5' fill='none' stroke='%23E5C281' stroke-width='3'/%3E%3Cline x1='32' y1='34' x2='44' y2='34' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='44' x2='26' y2='44' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='49' x2='26' y2='49' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='32' y1='46.5' x2='46' y2='46.5' stroke='%23C4C6CF' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #B1C7F1;
+      --on-primary: #1A3152;
+      --secondary: #FFB4A8;
+      --tertiary: #E5C281;
+      --surface: #15130E;
+      --surface-lowest: #100E09;
+      --surface-low: #1E1B16;
+      --surface-container: #221F1A;
+      --surface-high: #2C2A24;
+      --on-surface: #E8E2D9;
+      --on-surface-variant: #C4C6CF;
+      --outline-variant: #44474E;
+      --shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      --glow-primary: rgba(177, 199, 241, 0.08);
+      --glow-tertiary: rgba(229, 194, 129, 0.06);
+      --mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    }
+
+    html.light {
+      --primary: #0A2344;
+      --on-primary: #FFFFFF;
+      --secondary: #A03F32;
+      --tertiary: #7A5400;
+      --surface: #FFF8F0;
+      --surface-lowest: #FFFFFF;
+      --surface-low: #F9F3EA;
+      --surface-container: #F4EDE4;
+      --surface-high: #EEE7DE;
+      --on-surface: #1E1B16;
+      --on-surface-variant: #52555E;
+      --outline-variant: #D0C9BE;
+      --shadow: 0 20px 50px rgba(30, 27, 22, 0.10);
+      --glow-primary: rgba(10, 35, 68, 0.05);
+      --glow-tertiary: rgba(122, 84, 0, 0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--surface);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, var(--glow-primary), transparent 65%),
+        radial-gradient(ellipse 60% 40% at 85% 20%, var(--glow-tertiary), transparent 60%);
+      color: var(--on-surface);
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .container {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    /* Sticky Top Navigation */
+    .nav-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--surface) 84%, transparent);
+      border-bottom: 1px solid var(--outline-variant);
+    }
+
+    nav.topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      height: 58px;
+    }
+
+    .brand-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--on-surface);
+      font-weight: 700;
+      font-size: 14px;
+      text-decoration: none !important;
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: var(--surface-lowest);
+      border: 1px solid var(--primary);
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .version-pill {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--primary);
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      padding: 1px 7px;
+      border-radius: 999px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 12.5px;
+    }
+
+    .nav-links a {
+      color: var(--on-surface-variant);
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    @media (max-width: 760px) {
+      .nav-links {
+        display: none;
+      }
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      font-weight: 500;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-low);
+      color: var(--on-surface);
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+      text-decoration: none !important;
+    }
+
+    .btn:hover {
+      background: var(--surface-high);
+      border-color: var(--primary);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-sm {
+      font-size: 11.5px;
+      padding: 5px 10px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary);
+      opacity: 0.92;
+      border-color: var(--primary);
+    }
+
+    /* Panes (Folio signature style) */
+    .pane {
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 64px 0 40px;
+      text-align: center;
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--on-surface-variant);
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 22px;
+    }
+
+    .hero-eyebrow .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--tertiary);
+      display: inline-block;
+    }
+
+    .hero h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(36px, 6vw, 60px);
+      line-height: 1.08;
+      letter-spacing: -0.02em;
+      max-width: 780px;
+      margin: 0 auto 18px;
+      color: var(--on-surface);
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: var(--primary);
+    }
+
+    .hero-sub {
+      max-width: 650px;
+      margin: 0 auto 28px;
+      color: var(--on-surface-variant);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .hero-cta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .quick-install-bar {
+      max-width: 680px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      padding: 8px 10px 8px 14px;
+      text-align: left;
+    }
+
+    .quick-install-code {
+      overflow-x: auto;
+      white-space: nowrap;
+      font-size: 12px;
+      color: var(--on-surface);
+      scrollbar-width: none;
+    }
+    .quick-install-code::-webkit-scrollbar { display: none; }
+    .quick-install-code .prompt {
+      color: var(--tertiary);
+      user-select: none;
+      margin-right: 6px;
+    }
+
+    .hero-meta {
+      margin-top: 14px;
+      font-size: 11.5px;
+      color: var(--on-surface-variant);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+    }
+
+    /* Interactive Demo Window */
+    .demo-section {
+      padding: 12px 0 64px;
+    }
+
+    .demo-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .tab-group {
+      display: inline-flex;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 3px;
+      gap: 3px;
+    }
+
+    .tab-btn {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--on-surface-variant);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .tab-btn:hover {
+      color: var(--on-surface);
+    }
+
+    .tab-btn.active {
+      background: var(--surface-high);
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .demo-hint {
+      font-size: 11.5px;
+      color: var(--on-surface-variant);
+    }
+
+    .demo-hint strong {
+      color: var(--tertiary);
+      font-weight: 600;
+    }
+
+    .window-frame {
+      background: var(--surface);
+      border: 1px solid var(--outline-variant);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .window-chrome {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: var(--surface-low);
+      border-bottom: 1px solid var(--outline-variant);
+      font-size: 11.5px;
+      color: var(--on-surface-variant);
+    }
+
+    .chrome-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .chrome-dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--surface-high);
+      border: 1px solid var(--outline-variant);
+    }
+
+    .demo-shell {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .demo-topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 12px;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+    }
+
+    .demo-grid {
+      display: grid;
+      grid-template-columns: 205px 1fr 245px;
+      gap: 8px;
+    }
+
+    @media (max-width: 920px) {
+      .demo-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .demo-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .demo-pane {
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .demo-pane.focused {
+      border-color: var(--primary);
+      background: var(--surface-lowest);
+    }
+
+    .demo-pane.grow {
+      flex: 1;
+    }
+
+    .pane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--outline-variant);
+      font-size: 11px;
+    }
+
+    .pane-title {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .pane-title-sec {
+      color: var(--secondary);
+      font-weight: 600;
+    }
+
+    .pane-meta {
+      color: var(--on-surface-variant);
+      font-size: 10.5px;
+    }
+
+    .space-item, .vault-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      color: var(--on-surface);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      width: 100%;
+      font-family: inherit;
+      text-align: left;
+    }
+
+    .space-item:hover, .vault-item:hover {
+      background: var(--surface-container);
+    }
+
+    .space-item.active, .vault-item.active {
+      background: var(--surface-high);
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .vault-dir {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      padding: 3px 6px 1px;
+    }
+
+    .vault-indent {
+      padding-left: 16px;
+    }
+
+    .demo-entries {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 220px;
+    }
+
+    .entry-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: background 0.12s ease;
+    }
+
+    .entry-row:hover {
+      background: var(--surface-container);
+    }
+
+    .entry-left {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .sig-btn {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      width: 16px;
+      text-align: center;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      padding: 0;
+    }
+
+    .sig-action { color: var(--primary); }
+    .sig-done { color: var(--on-surface-variant); }
+    .sig-event { color: var(--tertiary); }
+    .sig-emotion { color: var(--secondary); }
+    .sig-note { color: var(--on-surface-variant); }
+
+    .entry-time {
+      color: var(--on-surface-variant);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .entry-text {
+      color: var(--on-surface);
+      word-break: break-word;
+    }
+
+    .entry-text.done {
+      text-decoration: line-through;
+      color: var(--on-surface-variant);
+    }
+
+    .paper-pill {
+      font-family: inherit;
+      font-size: 10.5px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-container);
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+
+    .paper-pill.no {
+      color: var(--secondary);
+      border-color: color-mix(in srgb, var(--secondary) 55%, var(--outline-variant));
+    }
+
+    .paper-pill.ok {
+      color: var(--on-surface-variant);
+    }
+
+    .paper-pill:hover {
+      background: var(--surface-high);
+    }
+
+    .rapid-form {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--outline-variant);
+      margin-top: auto;
+    }
+
+    .rapid-prefix {
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+
+    .rapid-input {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface-low);
+      color: var(--on-surface);
+      border: 1px solid var(--outline-variant);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .rapid-input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    .md-buffer {
+      font-size: 10.5px;
+      line-height: 1.5;
+      color: var(--on-surface-variant);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 170px;
+      overflow-y: auto;
+    }
+
+    .demo-bottombar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 12px;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+
+    .kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      color: var(--primary);
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+
+    .md-full-view {
+      padding: 18px 20px;
+      background: var(--surface-lowest);
+      font-size: 12.5px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      color: var(--on-surface);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Sections */
+    section.section-block {
+      padding: 56px 0;
+      border-top: 1px solid color-mix(in srgb, var(--outline-variant) 55%, transparent);
+    }
+
+    .section-header {
+      margin-bottom: 28px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tertiary);
+      margin-bottom: 6px;
+    }
+
+    .section-title {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(26px, 4vw, 36px);
+      line-height: 1.15;
+      color: var(--on-surface);
+      margin-bottom: 8px;
+    }
+
+    .section-desc {
+      color: var(--on-surface-variant);
+      max-width: 640px;
+      font-size: 13.5px;
+    }
+
+    /* Features Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    @media (max-width: 860px) {
+      .features-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 580px) {
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .feature-card {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s ease;
+    }
+
+    .feature-card:hover {
+      border-color: var(--primary);
+    }
+
+    .feature-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--outline-variant);
+    }
+
+    .feature-tag {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .feature-glyph {
+      color: var(--tertiary);
+      font-weight: 700;
+    }
+
+    .feature-card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--on-surface);
+    }
+
+    .feature-card p {
+      font-size: 12.5px;
+      color: var(--on-surface-variant);
+      line-height: 1.6;
+    }
+
+    /* Signifiers strip */
+    .sig-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .sig-card {
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sig-symbol {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .sig-name {
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--on-surface);
+    }
+
+    .sig-sub {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+
+    /* Install Section */
+    .install-panel {
+      padding: 20px;
+      margin-top: 14px;
+    }
+
+    .code-block {
+      position: relative;
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin: 12px 0;
+      overflow-x: auto;
+    }
+
+    .code-block pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--on-surface);
+      padding-right: 70px;
+    }
+
+    .code-block .comment {
+      color: var(--on-surface-variant);
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 4px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-container);
+      color: var(--on-surface);
+      cursor: pointer;
+    }
+
+    .copy-btn:hover {
+      background: var(--surface-high);
+      border-color: var(--primary);
+    }
+
+    .download-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .dl-card {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      text-decoration: none !important;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .dl-card:hover {
+      border-color: var(--primary);
+      background: var(--surface-high);
+    }
+
+    .dl-title {
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--primary);
+    }
+
+    .dl-file {
+      font-size: 11.5px;
+      color: var(--on-surface);
+    }
+
+    .dl-note {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+
+    /* Two-column layouts */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    @media (max-width: 820px) {
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Keybindings Table */
+    .kb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .kb-table th, .kb-table td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 55%, transparent);
+      vertical-align: top;
+    }
+
+    .kb-table th {
+      color: var(--primary);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .kb-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--outline-variant);
+      padding: 28px 0 40px;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Sticky Top Navigation -->
+  <div class="nav-wrap">
+    <div class="container">
+      <nav class="topbar">
+        <a href="#" class="brand-link">
+          <span class="brand-mark">.</span>
+          <span>folio</span>
+          <span class="version-pill">v1.5.1</span>
+        </a>
+        <div class="nav-links">
+          <a href="#demo">Live Preview</a>
+          <a href="#features">Features</a>
+          <a href="#install">Install</a>
+          <a href="#reference">Keybindings</a>
+          <a href="#vault">Obsidian Vault</a>
+        </div>
+        <div class="nav-actions">
+          <button id="theme-toggle" class="btn btn-sm" type="button" aria-label="Toggle color theme">☀ Light</button>
+          <a class="btn btn-sm btn-primary" href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">GitHub ↗</a>
+        </div>
+      </nav>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="container">
+      <div class="hero-eyebrow">
+        <span class="dot"></span>
+        <span>Single-binary Rust · Ratatui TUI + Embedded Web GUI · Plain Markdown</span>
+      </div>
+      <h1>Rapid logging for your <em>physical notebook</em>.</h1>
+      <p class="hero-sub">
+        Folio is a minimalistic, cross-platform Bullet Journal companion for the moments you don't have your analog notebook handy — backed by plain Obsidian-compatible Markdown and a built-in <strong>Carry to Paper</strong> queue.
+      </p>
+      <div class="hero-cta">
+        <a href="#install" class="btn btn-primary">Install Folio</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/releases/latest" target="_blank" rel="noopener" class="btn">Download Release v1.5.1</a>
+        <a href="#demo" class="btn">Try Interactive Preview</a>
+      </div>
+
+      <div class="quick-install-bar">
+        <code class="quick-install-code" id="hero-cmd"><span class="prompt">$</span>curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh</code>
+        <button class="btn btn-sm" type="button" data-copy="curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh">Copy</button>
+      </div>
+
+      <div class="hero-meta">
+        <span>macOS · Windows · Linux</span>
+        <span>·</span>
+        <span>Zero runtime dependencies</span>
+        <span>·</span>
+        <span>MIT License</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Interactive Preview -->
+  <section id="demo" class="demo-section">
+    <div class="container">
+      <div class="demo-controls">
+        <div class="tab-group" role="tablist" aria-label="Preview mode">
+          <button class="tab-btn active" type="button" data-view="tui" role="tab" aria-selected="true">folio --tui (6-Pane)</button>
+          <button class="tab-btn" type="button" data-view="md" role="tab" aria-selected="false">Daily Notes/2026-11-21.md</button>
+        </div>
+        <div class="demo-hint">
+          Interactive: click <strong>.</strong> to complete, click <strong>[paper:no]</strong> to transcribe, or log a new entry below.
+        </div>
+      </div>
+
+      <div class="window-frame">
+        <div class="window-chrome">
+          <div class="chrome-dots"><span></span><span></span><span></span></div>
+          <span id="window-title">folio --tui — ~/Obsidian/BuJo-Vault</span>
+          <span>Obsidian-compatible .md</span>
+        </div>
+
+        <!-- TUI 6-Pane Interactive View -->
+        <div id="view-tui" class="demo-shell">
+          <div class="demo-topbar">
+            <div>
+              <span style="color: var(--primary); font-weight: 700;">folio --tui v1.5.1</span>
+              <span style="color: var(--on-surface-variant); margin-left: 10px;" id="demo-doc-path">~/Obsidian/BuJo-Vault/Daily Notes/2026-11-21.md</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="color: var(--tertiary);">Notebook p. 42</span>
+              <span id="demo-paper-badge" style="color: var(--secondary);">3 to paper</span>
+            </div>
+          </div>
+
+          <div class="demo-grid">
+            <!-- Left Column -->
+            <div class="demo-col">
+              <div class="demo-pane">
+                <div class="pane-head">
+                  <span class="pane-title">[1] SPACES</span>
+                  <span class="pane-meta">Tab</span>
+                </div>
+                <button class="space-item active" type="button" data-space="daily"><span>Daily Log</span><span>2026-11-21</span></button>
+                <button class="space-item" type="button" data-space="studio"><span>Studio &amp; Work</span><span>3</span></button>
+                <button class="space-item" type="button" data-space="reading"><span>Reading &amp; Study</span><span>2</span></button>
+                <button class="space-item" type="button" data-space="personal"><span>Personal</span><span>2</span></button>
+              </div>
+
+              <div class="demo-pane grow">
+                <div class="pane-head">
+                  <span class="pane-title">[2] VAULT</span>
+                  <span class="pane-meta">BuJo-Vault</span>
+                </div>
+                <div class="vault-dir">▾ Daily Notes/</div>
+                <div class="vault-item active vault-indent">2026-11-21.md</div>
+                <div class="vault-item vault-indent">2026-11-index.md</div>
+                <div class="vault-dir">▾ Spaces/</div>
+                <div class="vault-item vault-indent">studio-work.md</div>
+                <div class="vault-item vault-indent">reading-study.md</div>
+                <div class="vault-dir">▾ Reviews/</div>
+                <div class="vault-item vault-indent">2026-W47.md</div>
+                <div class="vault-item">Future Log.md</div>
+              </div>
+            </div>
+
+            <!-- Center Column: Rapid Log -->
+            <div class="demo-pane focused">
+              <div class="pane-head">
+                <span class="pane-title" id="demo-log-title">[3] RAPID LOG — 2026-11-21</span>
+                <span class="pane-meta" id="demo-count">5 entries</span>
+              </div>
+
+              <div class="demo-entries" id="demo-entries"></div>
+
+              <form class="rapid-form" id="rapid-form">
+                <span class="rapid-prefix">:log [.] &gt;</span>
+                <input
+                  id="rapid-input"
+                  class="rapid-input"
+                  type="text"
+                  placeholder="Try: . Sketch cover layout  or  o Dinner at 7  or  = Focused"
+                  autocomplete="off"
+                >
+                <button class="btn btn-sm btn-primary" type="submit">Log</button>
+              </form>
+            </div>
+
+            <!-- Right Column -->
+            <div class="demo-col">
+              <div class="demo-pane">
+                <div class="pane-head">
+                  <span class="pane-title">[4] SIGNIFIERS</span>
+                  <span class="pane-meta">1–4 / 0</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 11px;">
+                  <div><span class="sig-action" style="font-weight:700;">.</span> Action</div>
+                  <div><span class="sig-done" style="font-weight:700;">×</span> Completed</div>
+                  <div><span class="sig-event" style="font-weight:700;">o</span> Event</div>
+                  <div><span class="sig-action" style="font-weight:700;">&gt;</span> Migrated</div>
+                  <div><span class="sig-emotion" style="font-weight:700;">=</span> Emotion</div>
+                  <div><span class="sig-action" style="font-weight:700;">&lt;</span> Scheduled</div>
+                  <div><span class="sig-note" style="font-weight:700;">-</span> Note</div>
+                  <div><span style="color:var(--tertiary);font-weight:700;">*</span> Priority</div>
+                </div>
+              </div>
+
+              <div class="demo-pane">
+                <div class="pane-head">
+                  <span class="pane-title-sec">[5] CARRY TO PAPER</span>
+                  <span class="pane-meta" id="demo-paper-count">3 pending</span>
+                </div>
+                <div id="demo-paper-list" style="display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--on-surface-variant);"></div>
+              </div>
+
+              <div class="demo-pane grow">
+                <div class="pane-head">
+                  <span class="pane-title">[6] .MD BUFFER</span>
+                  <span class="pane-meta">UTF-8</span>
+                </div>
+                <pre class="md-buffer" id="demo-md-buffer"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="demo-bottombar">
+            <div>
+              <span class="kbd">i</span> Log &nbsp;
+              <span class="kbd">Space</span> Toggle &nbsp;
+              <span class="kbd">m</span> Carry to Paper &nbsp;
+              <span class="kbd">&gt;</span> Migrate &nbsp;
+              <span class="kbd">/</span> Search &nbsp;
+              <span class="kbd">w</span> Weekly Review &nbsp;
+              <span class="kbd">?</span> Help
+            </div>
+            <div>:w saved · Obsidian sync ready</div>
+          </div>
+        </div>
+
+        <!-- Full Markdown View -->
+        <div id="view-md" class="md-full-view hidden"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="section-block">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">Designed for Analog + Digital</div>
+        <h2 class="section-title">Everything you need for Bullet Journaling, nothing in the way.</h2>
+        <p class="section-desc">
+          Capture thoughts in seconds from your terminal or browser, keep everything as durable local Markdown, and transcribe back to your paper notebook when you sit down at your desk.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">DUAL INTERFACE</span>
+            <span class="feature-glyph">1 bin</span>
+          </div>
+          <h3>TUI, Web GUI &amp; Shell CLI</h3>
+          <p>
+            Run <code>folio --tui</code> for a 6-pane Ratatui terminal workspace, <code>folio --gui</code> for a zero-dependency local Web UI (Dark &amp; Light), or <code>folio log "..."</code> for instant shell capture.
+          </p>
+        </article>
+
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">CARRY TO PAPER</span>
+            <span class="feature-glyph">[paper:no]</span>
+          </div>
+          <h3>Built for Physical Notebooks</h3>
+          <p>
+            Every digital entry tracks whether you've copied it into your physical notebook (<code>[paper:no]</code> → <code>[paper:ok]</code>) alongside your current physical page number (<code>Notebook p. 42</code>).
+          </p>
+        </article>
+
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">OBSIDIAN MARKDOWN</span>
+            <span class="feature-glyph">[[vault]]</span>
+          </div>
+          <h3>Plain Local .md Files</h3>
+          <p>
+            No proprietary database or cloud lock-in. Entries live as clean Markdown with YAML frontmatter, <code>[[wikilinks]]</code>, and <code>#tags</code> directly inside your Obsidian vault.
+          </p>
+        </article>
+
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">CUSTOM SPACES</span>
+            <span class="feature-glyph">Collections</span>
+          </div>
+          <h3>Organize by Context</h3>
+          <p>
+            Separate Daily Logs from custom Spaces like <code>Studio &amp; Work</code>, <code>Reading &amp; Study</code>, or <code>Personal</code>. Migrate tasks between Tomorrow, any Space, or your Future Log.
+          </p>
+        </article>
+
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">REFLECTION</span>
+            <span class="feature-glyph">Reviews</span>
+          </div>
+          <h3>Weekly, Monthly &amp; Future Logs</h3>
+          <p>
+            Generate structured Weekly (<code>Reviews/YYYY-Www.md</code>) and Monthly reviews automatically, maintain a <code>Future Log.md</code>, and get an auto-updated Monthly Index.
+          </p>
+        </article>
+
+        <article class="pane feature-card">
+          <div class="feature-head">
+            <span class="feature-tag">PORTABILITY</span>
+            <span class="feature-glyph">Import/Export</span>
+          </div>
+          <h3>Bring Your Notes With You</h3>
+          <p>
+            Import from Markdown, Obsidian, Apple Notes, Notion, CSV, JSON, or plain text via <code>folio import</code>. Export any document to Markdown, JSON, or CSV anytime.
+          </p>
+        </article>
+      </div>
+
+      <!-- Signifiers Legend -->
+      <div class="sig-grid" aria-label="Bullet Journal signifiers">
+        <div class="sig-card">
+          <div class="sig-symbol sig-action">.</div>
+          <div>
+            <div class="sig-name">Action</div>
+            <div class="sig-sub">Toggles to ×, &gt;, &lt;, ~</div>
+          </div>
+        </div>
+        <div class="sig-card">
+          <div class="sig-symbol sig-event">o</div>
+          <div>
+            <div class="sig-name">Event</div>
+            <div class="sig-sub">Meetings &amp; moments</div>
+          </div>
+        </div>
+        <div class="sig-card">
+          <div class="sig-symbol sig-emotion">=</div>
+          <div>
+            <div class="sig-name">Emotion</div>
+            <div class="sig-sub">Mood &amp; reflection</div>
+          </div>
+        </div>
+        <div class="sig-card">
+          <div class="sig-symbol sig-note">-</div>
+          <div>
+            <div class="sig-name">Note</div>
+            <div class="sig-sub">Facts, quotes, ideas</div>
+          </div>
+        </div>
+        <div class="sig-card">
+          <div class="sig-symbol" style="color: var(--tertiary);">*</div>
+          <div>
+            <div class="sig-name">Priority</div>
+            <div class="sig-sub">High-importance modifier</div>
+          </div>
+        </div>
+        <div class="sig-card">
+          <div class="sig-symbol" style="color: var(--secondary);">!</div>
+          <div>
+            <div class="sig-name">Inspiration</div>
+            <div class="sig-sub">Creative spark modifier</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation -->
+  <section id="install" class="section-block">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">Get Started</div>
+        <h2 class="section-title">Install Folio in seconds.</h2>
+        <p class="section-desc">
+          Pre-built native installers, one-line scripts, and portable archives for macOS, Windows, and Linux — or compile from source with Cargo.
+        </p>
+      </div>
+
+      <div class="tab-group" role="tablist" aria-label="Operating system">
+        <button class="tab-btn active" type="button" data-os="macos">macOS</button>
+        <button class="tab-btn" type="button" data-os="windows">Windows</button>
+        <button class="tab-btn" type="button" data-os="linux">Linux</button>
+        <button class="tab-btn" type="button" data-os="source">From Source</button>
+      </div>
+
+      <!-- macOS -->
+      <div class="pane install-panel" data-os-panel="macos">
+        <div style="font-weight: 600; color: var(--primary);">One-Line Installer (Apple Silicon &amp; Intel)</div>
+        <div class="code-block">
+          <pre>curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh</pre>
+          <button class="copy-btn" type="button" data-copy="curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh">Copy</button>
+        </div>
+        <div class="download-grid">
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-macos-universal.pkg">
+            <span class="dl-title">Universal .pkg Installer ↓</span>
+            <span class="dl-file">folio-macos-universal.pkg</span>
+            <span class="dl-note">Apple Silicon + Intel native package</span>
+          </a>
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-macos-arm64.tar.gz">
+            <span class="dl-title">Apple Silicon Archive ↓</span>
+            <span class="dl-file">folio-macos-arm64.tar.gz</span>
+            <span class="dl-note">Portable M1/M2/M3/M4 binary</span>
+          </a>
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-macos-x64.tar.gz">
+            <span class="dl-title">Intel Archive ↓</span>
+            <span class="dl-file">folio-macos-x64.tar.gz</span>
+            <span class="dl-note">Portable x86_64 binary</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Windows -->
+      <div class="pane install-panel hidden" data-os-panel="windows">
+        <div style="font-weight: 600; color: var(--primary);">One-Line PowerShell Installer</div>
+        <div class="code-block">
+          <pre>irm https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.ps1 | iex</pre>
+          <button class="copy-btn" type="button" data-copy="irm https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.ps1 | iex">Copy</button>
+        </div>
+        <div class="download-grid">
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-windows-x64-setup.exe">
+            <span class="dl-title">Windows Setup Wizard ↓</span>
+            <span class="dl-file">folio-windows-x64-setup.exe</span>
+            <span class="dl-note">Inno Setup installer (x86_64)</span>
+          </a>
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-windows-x64.zip">
+            <span class="dl-title">Portable ZIP Archive ↓</span>
+            <span class="dl-file">folio-windows-x64.zip</span>
+            <span class="dl-note">Standalone folio.exe</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Linux -->
+      <div class="pane install-panel hidden" data-os-panel="linux">
+        <div style="font-weight: 600; color: var(--primary);">One-Line Shell Installer</div>
+        <div class="code-block">
+          <pre>curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh</pre>
+          <button class="copy-btn" type="button" data-copy="curl -fsSL https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/install.sh | sh">Copy</button>
+        </div>
+        <div class="download-grid">
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-linux-x64.deb">
+            <span class="dl-title">Debian / Ubuntu Package ↓</span>
+            <span class="dl-file">folio-linux-x64.deb</span>
+            <span class="dl-note">Install via sudo dpkg -i folio-linux-x64.deb</span>
+          </a>
+          <a class="dl-card" href="https://github.com/HamidRezaAshkiyan/folio/releases/latest/download/folio-linux-x64.tar.gz">
+            <span class="dl-title">Linux x64 Archive ↓</span>
+            <span class="dl-file">folio-linux-x64.tar.gz</span>
+            <span class="dl-note">Portable x86_64 binary</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Source -->
+      <div class="pane install-panel hidden" data-os-panel="source">
+        <div style="font-weight: 600; color: var(--primary);">Build with Rust &amp; Cargo</div>
+        <div class="code-block">
+          <pre>git clone https://github.com/HamidRezaAshkiyan/folio.git
+cd folio
+cargo install --path .</pre>
+          <button class="copy-btn" type="button" data-copy="git clone https://github.com/HamidRezaAshkiyan/folio.git && cd folio && cargo install --path .">Copy</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start & Keybindings -->
+  <section id="reference" class="section-block">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">Workflow Reference</div>
+        <h2 class="section-title">Fast from the shell. Fluid in the TUI.</h2>
+        <p class="section-desc">
+          Log without leaving your terminal, or open the full interactive TUI / Web GUI when planning your day.
+        </p>
+      </div>
+
+      <div class="two-col">
+        <!-- Left: CLI Quick Start -->
+        <div class="pane" style="padding: 18px;">
+          <div class="pane-head" style="margin-bottom: 10px;">
+            <span class="pane-title">CLI QUICK START</span>
+            <span class="pane-meta">folio --help</span>
+          </div>
+          <div class="code-block" style="margin: 0;">
+            <pre><span class="comment"># Launch the Terminal UI (default)</span>
+folio
+folio --tui
+
+<span class="comment"># Launch the embedded Web GUI in your browser</span>
+folio --gui
+folio --gui --port 3420 --no-open
+
+<span class="comment"># Use a custom Obsidian vault path</span>
+folio --vault ~/Obsidian/My-Vault --tui
+
+<span class="comment"># One-line rapid logging from any shell</span>
+folio log ". Finalize studio lighting sketch"
+folio log "o Coffee with Maya at Blue Bottle"
+folio log "= Calm after walking without headphones"
+folio log "- Small repairs made daily"
+
+<span class="comment"># Log directly into a custom Space</span>
+folio log -s "Reading &amp; Study" "- Finish ch. 4"
+
+<span class="comment"># Generate Weekly or Monthly Review</span>
+folio review weekly
+folio review monthly
+
+<span class="comment"># Import / Export notes</span>
+folio import ~/Desktop/apple-notes.txt
+folio export --format json --output today.json</pre>
+            <button class="copy-btn" type="button" data-copy='folio --tui'>Copy</button>
+          </div>
+        </div>
+
+        <!-- Right: TUI Keybindings -->
+        <div class="pane" style="padding: 18px;">
+          <div class="pane-head" style="margin-bottom: 10px;">
+            <span class="pane-title">TUI KEYBINDINGS</span>
+            <span class="pane-meta">Press ? in app</span>
+          </div>
+          <table class="kb-table">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="kbd">Ctrl+N</span> / <span class="kbd">i</span></td>
+                <td>Focus rapid-log prompt (<code>. </code>, <code>o </code>, <code>= </code>, <code>- </code>, <code>*. </code>, <code>!- </code>)</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">/</span> / <span class="kbd">Ctrl+F</span></td>
+                <td>Instant Vault Search across notes, Spaces &amp; <code>#tags</code></td>
+              </tr>
+              <tr>
+                <td><span class="kbd">[</span> / <span class="kbd">]</span> / <span class="kbd">t</span></td>
+                <td>Previous Day / Next Day / Today</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">Tab</span></td>
+                <td>Cycle through Spaces</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">Space</span></td>
+                <td>Toggle Action <code>.</code> ↔ Completed <code>×</code></td>
+              </tr>
+              <tr>
+                <td><span class="kbd">*</span> / <span class="kbd">!</span></td>
+                <td>Toggle Priority (<code>*</code>) / Inspiration (<code>!</code>)</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">m</span> / <span class="kbd">M</span></td>
+                <td>Mark selected / all entries copied to paper (<code>[paper:ok]</code>)</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">&gt;</span> / <span class="kbd">&lt;</span></td>
+                <td>Smart Migration Picker / Quick Future Log</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">1</span>–<span class="kbd">4</span> / <span class="kbd">#</span> / <span class="kbd">0</span></td>
+                <td>Filter by signifier / <code>#tag</code> / ALL</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">w</span> / <span class="kbd">r</span></td>
+                <td>Generate &amp; open Weekly / Monthly Review</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">:space</span> / <span class="kbd">:page</span></td>
+                <td>Create custom Space / Set physical Notebook page</td>
+              </tr>
+              <tr>
+                <td><span class="kbd">:imp</span> / <span class="kbd">:exp</span></td>
+                <td>Import notes / Export (<code>md</code>, <code>json</code>, <code>csv</code>)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Obsidian Vault Structure -->
+  <section id="vault" class="section-block">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">Plain Text Forever</div>
+        <h2 class="section-title">Your vault, readable in Obsidian or any text editor.</h2>
+        <p class="section-desc">
+          Default vault lives at <code>~/Obsidian/BuJo-Vault</code> — configurable via <code>--vault</code>, <code>FOLIO_VAULT</code>, or <code>~/.config/folio/config.toml</code>.
+        </p>
+      </div>
+
+      <div class="two-col">
+        <div class="pane" style="padding: 18px;">
+          <div class="pane-head" style="margin-bottom: 10px;">
+            <span class="pane-title">VAULT DIRECTORY LAYOUT</span>
+            <span class="pane-meta">~/Obsidian/BuJo-Vault/</span>
+          </div>
+          <div class="code-block" style="margin: 0;">
+            <pre>~/Obsidian/BuJo-Vault/
+├── Daily Notes/
+│   ├── 2026-11-21.md
+│   └── 2026-11-index.md
+├── Spaces/
+│   ├── studio-work.md
+│   ├── reading-study.md
+│   └── personal.md
+├── Reviews/
+│   ├── 2026-W47.md
+│   └── 2026-11-review.md
+└── Future Log.md</pre>
+          </div>
+        </div>
+
+        <div class="pane" style="padding: 18px;">
+          <div class="pane-head" style="margin-bottom: 10px;">
+            <span class="pane-title">DAILY NOTES/2026-11-21.MD</span>
+            <span class="pane-meta">YAML + Markdown</span>
+          </div>
+          <div class="code-block" style="margin: 0;">
+            <pre>---
+date: 2026-11-21
+page: 42
+tags:
+  - bujo
+  - daily
+---
+. [08:15] Finalize studio lighting sketch before Monday critique [paper:no]
+o [09:30] Coffee with Maya at Blue Bottle — discussed zine layout [paper:ok]
+= [10:45] Calm and unhurried after walking without headphones [paper:no]
+- [11:10] Christopher Alexander: living spaces come from small repairs [paper:no]
+× [11:25] Order fountain pen ink refill (Iroshizuku Shin-kai) [paper:ok]</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container footer-inner">
+      <div>
+        <strong style="color: var(--on-surface);">Folio</strong> v1.5.1 · Built in Rust · Released under the MIT License
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Theme toggle (persisted in localStorage, defaults to Folio dark)
+    const htmlEl = document.documentElement;
+    const themeBtn = document.getElementById('theme-toggle');
+    const savedTheme = localStorage.getItem('folio-site-theme');
+    if (savedTheme === 'light') {
+      htmlEl.classList.remove('dark');
+      htmlEl.classList.add('light');
+      themeBtn.textContent = '☾ Dark';
+    }
+    themeBtn.addEventListener('click', () => {
+      const isLight = htmlEl.classList.toggle('light');
+      htmlEl.classList.toggle('dark', !isLight);
+      localStorage.setItem('folio-site-theme', isLight ? 'light' : 'dark');
+      themeBtn.textContent = isLight ? '☾ Dark' : '☀ Light';
+    });
+
+    // Copy buttons
+    document.querySelectorAll('[data-copy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const text = btn.getAttribute('data-copy');
+        try {
+          await navigator.clipboard.writeText(text);
+          const original = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = original; }, 1600);
+        } catch {
+          btn.textContent = 'Select & Copy';
+        }
+      });
+    });
+
+    // Install OS tabs
+    const osTabs = document.querySelectorAll('[data-os]');
+    const osPanels = document.querySelectorAll('[data-os-panel]');
+    osTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.getAttribute('data-os');
+        osTabs.forEach((t) => t.classList.toggle('active', t === tab));
+        osPanels.forEach((p) => p.classList.toggle('hidden', p.getAttribute('data-os-panel') !== target));
+      });
+    });
+
+    // Interactive Folio Preview State
+    const spacesData = {
+      daily: {
+        title: '[3] RAPID LOG — 2026-11-21',
+        path: '~/Obsidian/BuJo-Vault/Daily Notes/2026-11-21.md',
+        frontmatter: '---\ndate: 2026-11-21\npage: 42\ntags:\n  - bujo\n  - daily\n---',
+        entries: [
+          { sig: '.', time: '08:15', text: 'Finalize studio lighting sketch before Monday critique', paper: false },
+          { sig: 'o', time: '09:30', text: 'Coffee with Maya at Blue Bottle — discussed zine layout', paper: true },
+          { sig: '=', time: '10:45', text: 'Calm and unhurried after walking without headphones', paper: false },
+          { sig: '-', time: '11:10', text: 'Christopher Alexander: living spaces come from small repairs', paper: false },
+          { sig: '×', time: '11:25', text: 'Order fountain pen ink refill (Iroshizuku Shin-kai)', paper: true },
+        ],
+      },
+      studio: {
+        title: '[3] RAPID LOG — Studio & Work',
+        path: '~/Obsidian/BuJo-Vault/Spaces/studio-work.md',
+        frontmatter: '---\nspace: Studio & Work\ntags:\n  - bujo\n  - studio\n---',
+        entries: [
+          { sig: '.', time: '09:00', text: 'Print 3 test spreads on 120gsm cream stock', paper: false },
+          { sig: '.', time: '14:20', text: 'Send revised kerning proof to [[Maya]]', paper: true },
+          { sig: '-', time: '16:05', text: 'Keep margins generous — 18mm inner, 14mm outer', paper: false },
+        ],
+      },
+      reading: {
+        title: '[3] RAPID LOG — Reading & Study',
+        path: '~/Obsidian/BuJo-Vault/Spaces/reading-study.md',
+        frontmatter: '---\nspace: Reading & Study\ntags:\n  - bujo\n  - reading\n---',
+        entries: [
+          { sig: '.', time: '20:10', text: 'Finish A Pattern Language chapter 4 #architecture', paper: false },
+          { sig: '-', time: '21:00', text: 'Notes on quiet alcoves and natural north light', paper: true },
+        ],
+      },
+      personal: {
+        title: '[3] RAPID LOG — Personal',
+        path: '~/Obsidian/BuJo-Vault/Spaces/personal.md',
+        frontmatter: '---\nspace: Personal\ntags:\n  - bujo\n  - personal\n---',
+        entries: [
+          { sig: 'o', time: '18:00', text: 'Evening walk along the river', paper: true },
+          { sig: '=', time: '19:15', text: 'Grateful for a quiet Sunday reset', paper: false },
+        ],
+      },
+    };
+
+    let currentSpace = 'daily';
+
+    const entriesEl = document.getElementById('demo-entries');
+    const paperListEl = document.getElementById('demo-paper-list');
+    const paperCountEl = document.getElementById('demo-paper-count');
+    const paperBadgeEl = document.getElementById('demo-paper-badge');
+    const mdBufferEl = document.getElementById('demo-md-buffer');
+    const mdFullEl = document.getElementById('view-md');
+    const logTitleEl = document.getElementById('demo-log-title');
+    const docPathEl = document.getElementById('demo-doc-path');
+    const countEl = document.getElementById('demo-count');
+
+    function sigClass(sig) {
+      if (sig === '.') return 'sig-action';
+      if (sig === '×') return 'sig-done';
+      if (sig === 'o') return 'sig-event';
+      if (sig === '=') return 'sig-emotion';
+      return 'sig-note';
+    }
+
+    function buildMarkdown(space) {
+      const lines = space.entries.map(
+        (e) => `${e.sig} [${e.time}] ${e.text} [paper:${e.paper ? 'ok' : 'no'}]`
+      );
+      return `${space.frontmatter}\n${lines.join('\n')}`;
+    }
+
+    function renderDemo() {
+      const space = spacesData[currentSpace];
+      logTitleEl.textContent = space.title;
+      docPathEl.textContent = space.path;
+      countEl.textContent = `${space.entries.length} entries`;
+
+      entriesEl.innerHTML = '';
+      space.entries.forEach((entry, idx) => {
+        const row = document.createElement('div');
+        row.className = 'entry-row';
+
+        const left = document.createElement('div');
+        left.className = 'entry-left';
+
+        const sigBtn = document.createElement('button');
+        sigBtn.type = 'button';
+        sigBtn.className = `sig-btn ${sigClass(entry.sig)}`;
+        sigBtn.textContent = entry.sig;
+        sigBtn.title = entry.sig === '.' || entry.sig === '×' ? 'Click to toggle Action / Completed' : 'Signifier';
+        sigBtn.addEventListener('click', () => {
+          if (entry.sig === '.') entry.sig = '×';
+          else if (entry.sig === '×') entry.sig = '.';
+          renderDemo();
+        });
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'entry-time';
+        timeSpan.textContent = `[${entry.time}]`;
+
+        const textSpan = document.createElement('span');
+        textSpan.className = `entry-text${entry.sig === '×' ? ' done' : ''}`;
+        textSpan.textContent = entry.text;
+
+        left.append(sigBtn, timeSpan, textSpan);
+
+        const paperBtn = document.createElement('button');
+        paperBtn.type = 'button';
+        paperBtn.className = `paper-pill ${entry.paper ? 'ok' : 'no'}`;
+        paperBtn.textContent = entry.paper ? '[paper:ok]' : '[paper:no]';
+        paperBtn.title = 'Click to toggle Carry to Paper status';
+        paperBtn.addEventListener('click', () => {
+          entry.paper = !entry.paper;
+          renderDemo();
+        });
+
+        row.append(left, paperBtn);
+        entriesEl.appendChild(row);
+      });
+
+      const pending = space.entries.filter((e) => !e.paper);
+      paperCountEl.textContent = `${pending.length} pending`;
+      paperBadgeEl.textContent = `${pending.length} to paper`;
+      paperListEl.innerHTML = '';
+      if (pending.length === 0) {
+        const ok = document.createElement('div');
+        ok.style.color = 'var(--primary)';
+        ok.textContent = '✓ All entries carried to paper.';
+        paperListEl.appendChild(ok);
+      } else {
+        pending.slice(0, 4).forEach((e) => {
+          const item = document.createElement('div');
+          item.textContent = `${e.sig} ${e.text.length > 26 ? e.text.slice(0, 26) + '…' : e.text}`;
+          paperListEl.appendChild(item);
+        });
+      }
+
+      const md = buildMarkdown(space);
+      mdBufferEl.textContent = md;
+      mdFullEl.textContent = md;
+    }
+
+    // Space switching
+    document.querySelectorAll('[data-space]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentSpace = btn.getAttribute('data-space');
+        document.querySelectorAll('[data-space]').forEach((b) => b.classList.toggle('active', b === btn));
+        renderDemo();
+      });
+    });
+
+    // Rapid log form
+    document.getElementById('rapid-form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('rapid-input');
+      const raw = input.value.trim();
+      if (!raw) return;
+
+      let sig = '.';
+      let text = raw;
+      const match = raw.match(/^([.o=\-×])\s+(.+)$/);
+      if (match) {
+        sig = match[1];
+        text = match[2];
+      }
+
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+
+      spacesData[currentSpace].entries.push({
+        sig,
+        time: `${hh}:${mm}`,
+        text,
+        paper: false,
+      });
+      input.value = '';
+      renderDemo();
+    });
+
+    // Preview view tabs (TUI vs Markdown)
+    const viewTabs = document.querySelectorAll('[data-view]');
+    const viewTui = document.getElementById('view-tui');
+    const viewMd = document.getElementById('view-md');
+    const winTitle = document.getElementById('window-title');
+    viewTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const v = tab.getAttribute('data-view');
+        viewTabs.forEach((t) => {
+          const active = t === tab;
+          t.classList.toggle('active', active);
+          t.setAttribute('aria-selected', String(active));
+        });
+        viewTui.classList.toggle('hidden', v !== 'tui');
+        viewMd.classList.toggle('hidden', v !== 'md');
+        winTitle.textContent = v === 'tui'
+          ? 'folio --tui — ~/Obsidian/BuJo-Vault'
+          : spacesData[currentSpace].path;
+      });
+    });
+
+    renderDemo();
+  </script>
+</body>
+</html>
