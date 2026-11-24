@@ -33,16 +33,33 @@ jobs:
           tar -czf dist/folio-macos-arm64.tar.gz -C dist/folio-macos-arm64 .
           tar -czf dist/folio-macos-x64.tar.gz -C dist/folio-macos-x64 .
 
-      - name: Build Universal macOS .pkg installer
+      - name: Build Universal macOS Folio.app & .pkg installer
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          VERSION="${VERSION:-1.5.0}"
+          VERSION="${VERSION:-1.8.0}"
           mkdir -p pkgroot/usr/local/bin
           lipo -create \
             target/aarch64-apple-darwin/release/folio \
             target/x86_64-apple-darwin/release/folio \
             -output pkgroot/usr/local/bin/folio
           chmod 755 pkgroot/usr/local/bin/folio
+
+          # Assemble Folio.app bundle (Universal GUI + icon)
+          APP="dist/Folio.app"
+          mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+          cp pkgroot/usr/local/bin/folio "${APP}/Contents/MacOS/folio"
+          cp packaging/macos/folio-gui "${APP}/Contents/MacOS/folio-gui"
+          chmod 755 "${APP}/Contents/MacOS/folio" "${APP}/Contents/MacOS/folio-gui"
+          cp assets/folio.icns "${APP}/Contents/Resources/folio.icns"
+          sed "s/{{VERSION}}/${VERSION}/g" packaging/macos/Info.plist > "${APP}/Contents/Info.plist"
+
+          # Portable macOS .app zip
+          (cd dist && zip -r -q Folio-macos-universal.app.zip Folio.app)
+
+          # Include /Applications/Folio.app in Universal .pkg installer
+          mkdir -p pkgroot/Applications
+          cp -R "${APP}" pkgroot/Applications/Folio.app
+
           pkgbuild \
             --root pkgroot \
             --identifier com.hamidrezaashkiyan.folio \
@@ -57,6 +74,7 @@ jobs:
             dist/folio-macos-arm64.tar.gz
             dist/folio-macos-x64.tar.gz
             dist/folio-macos-universal.pkg
+            dist/Folio-macos-universal.app.zip
 
   build-linux:
     name: Build Linux (x64 .tar.gz & .deb)
@@ -171,7 +189,7 @@ jobs:
           cp packaging/install.sh artifacts/install.sh
           cp packaging/install.ps1 artifacts/install.ps1
           cd artifacts
-          sha256sum folio-* install.sh install.ps1 > SHA256SUMS.txt
+          sha256sum folio-* Folio-* install.sh install.ps1 > SHA256SUMS.txt
 
       - name: Publish Release
         env:

@@ -152,6 +152,8 @@ pub fn infer_doc_kind(rel_path: &str) -> DocKind {
     let norm = rel_path.replace('\\', "/");
     if norm.eq_ignore_ascii_case("Index.md") || norm.ends_with("-index.md") {
         DocKind::Index
+    } else if norm.ends_with("-monthly.md") {
+        DocKind::MonthlyLog
     } else if norm.starts_with("Daily Notes/") {
         DocKind::Daily
     } else if norm.starts_with("Spaces/") {
@@ -172,6 +174,12 @@ pub fn infer_doc_kind(rel_path: &str) -> DocKind {
 /// - Folio without time: `. Task text [paper:ok]`
 /// - Obsidian checklist: `- [ ] Task text` / `- [x] Task text`
 pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
+    let leading_spaces = line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .map(|c| if c == '\t' { 2usize } else { 1usize })
+        .sum::<usize>();
+    let indent = ((leading_spaces / 2).min(3)) as u8;
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("---") {
         return None;
@@ -191,6 +199,7 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
             signifier: Signifier::Action,
             text: clean_text,
             paper_synced,
+            indent,
         });
     }
     if let Some(rest) = trimmed
@@ -208,6 +217,7 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
             signifier: Signifier::Done,
             text: clean_text,
             paper_synced,
+            indent,
         });
     }
 
@@ -255,6 +265,7 @@ pub fn parse_entry_line(line: &str, id: usize) -> Option<Entry> {
         signifier: sig,
         text,
         paper_synced,
+        indent,
     })
 }
 
@@ -332,14 +343,15 @@ pub fn serialize_markdown(doc: &Document) -> String {
         } else {
             "[paper:no]"
         };
+        let indent_pad = "  ".repeat(entry.indent.min(3) as usize);
         let prefix = format!("{}{}", entry.modifier.symbol(), entry.signifier.symbol());
         if entry.time != "--:--" && !entry.time.is_empty() {
             out.push_str(&format!(
-                "{} [{}] {} {}\n",
-                prefix, entry.time, entry.text, paper
+                "{}{} [{}] {} {}\n",
+                indent_pad, prefix, entry.time, entry.text, paper
             ));
         } else {
-            out.push_str(&format!("{} {} {}\n", prefix, entry.text, paper));
+            out.push_str(&format!("{}{} {} {}\n", indent_pad, prefix, entry.text, paper));
         }
     }
 

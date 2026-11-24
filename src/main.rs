@@ -96,6 +96,8 @@ enum Commands {
     },
     /// Refresh and print the Master Vault Index (Index.md) with Page Threading
     Index,
+    /// Open or create the current month's Monthly Log (Calendar Page + Task List)
+    Monthly,
 }
 
 fn main() -> Result<()> {
@@ -222,6 +224,13 @@ fn handle_subcommand(vault: &Vault, default_page: u32, cmd: Commands) -> Result<
         Commands::Index => {
             let doc = vault.update_master_index()?;
             println!("Master Index updated: {}", doc.path.display());
+            for line in &doc.prose_lines {
+                println!("{line}");
+            }
+        }
+        Commands::Monthly => {
+            let doc = vault.open_or_create_monthly_log(today)?;
+            println!("Monthly Log ready: {}", doc.path.display());
             for line in &doc.prose_lines {
                 println!("{line}");
             }

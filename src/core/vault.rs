@@ -1,10 +1,10 @@
 use crate::core::markdown::{parse_markdown, serialize_markdown};
 use crate::core::model::{
-    DocKind, Document, Entry, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultFileNode,
-    VaultTree, slugify,
+    DocKind, Document, Entry, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultEntryRef,
+    VaultFileNode, VaultTree, slugify,
 };
 use anyhow::{Context, Result, anyhow};
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,9 +32,17 @@ impl Vault {
         fs::create_dir_all(&reviews_dir)
             .with_context(|| format!("failed to create {}", reviews_dir.display()))?;
 
-        // Initialize Future Log if missing
+        // Initialize Future Log with 6-month structured buckets if missing
         let future_log = self.root.join("Future Log.md");
         if !future_log.exists() {
+            let mut fl_prose = vec![
+                "# Future Log".to_string(),
+                "Scheduled tasks (`<`) and upcoming events across future months.".to_string(),
+                String::new(),
+            ];
+            for ym in Self::upcoming_months(Self::today_date(), 6) {
+                fl_prose.push(format!("## {ym}"));
+            }
             let doc = Document {
                 path: future_log.clone(),
                 rel_path: "Future Log.md".to_string(),
@@ -47,10 +55,7 @@ impl Vault {
                 tags: vec!["bujo".into(), "future-log".into()],
                 extra_frontmatter: vec![],
                 entries: vec![],
-                prose_lines: vec![
-                    "# Future Log".to_string(),
-                    "Scheduled tasks (`<`) and upcoming events across future months.".to_string(),
-                ],
+                prose_lines: fl_prose,
             };
             fs::write(&future_log, serialize_markdown(&doc))?;
         }
@@ -370,7 +375,7 @@ impl Vault {
         let mut rows: BTreeMap<String, (Option<u32>, usize, usize)> = BTreeMap::new();
         let files = list_md_files(&self.root.join("Daily Notes"))?;
         for f in files {
-            if f.ends_with("-index.md") || !f.starts_with(&ym) {
+            if f.ends_with("-index.md") || f.ends_with("-monthly.md") || !f.starts_with(&ym) {
                 continue;
             }
             let stem = f.trim_end_matches(".md").to_string();
@@ -469,7 +474,7 @@ impl Vault {
         let mut months: BTreeMap<String, (Vec<u32>, usize)> = BTreeMap::new();
         let daily_files = list_md_files(&self.root.join("Daily Notes"))?;
         for f in daily_files {
-            if f.ends_with("-index.md") || f.len() < 7 {
+            if f.ends_with("-index.md") || f.ends_with("-monthly.md") || f.len() < 7 {
                 continue;
             }
             let ym = f[0..7].to_string();
@@ -590,6 +595,322 @@ impl Vault {
         Ok(())
     }
 
+    /// Return the next `count` months formatted as `YYYY-MM` starting from `anchor`'s month.
+    pub fn upcoming_months(anchor: NaiveDate, count: usize) -> Vec<String> {
+        let mut out = Vec::with_capacity(count);
+        let mut y = anchor.year();
+        let mut m = anchor.month();
+        for _ in 0..count {
+            out.push(format!("{y:04}-{m:02}"));
+            if m == 12 {
+                y += 1;
+                m = 1;
+            } else {
+                m += 1;
+            }
+        }
+        out
+    }
+
+    /// Rename a custom Space file and update its frontmatter + Master Index.
+    pub fn rename_space(&self, old_rel_path: &str, new_name: &str) -> Result<Document> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("new space name cannot be empty"));
+        }
+        if !old_rel_path.starts_with("Spaces/") {
+            return Err(anyhow!("only custom Spaces can be renamed"));
+        }
+        let new_slug = slugify(trimmed);
+        if new_slug.is_empty() {
+            return Err(anyhow!("space name must contain alphanumeric characters"));
+        }
+        let mut doc = self.load_document(old_rel_path)?;
+        let new_rel = format!("Spaces/{new_slug}.md");
+        let old_full = self.root.join(old_rel_path);
+        let new_full = self.root.join(&new_rel);
+
+        if old_full != new_full && new_full.exists() {
+            return Err(anyhow!("a space named '{trimmed}' already exists"));
+        }
+
+        doc.title = trimmed.to_string();
+        doc.space = Some(trimmed.to_string());
+        doc.rel_path = new_rel.clone();
+        doc.path = new_full.clone();
+        self.save_document(&doc)?;
+
+        if old_full != new_full && old_full.exists() {
+            let _ = fs::remove_file(&old_full);
+            let _ = self.update_master_index();
+        }
+        Ok(doc)
+    }
+
+    /// Delete a custom Space file and refresh the Master Index.
+    pub fn delete_space(&self, rel_path: &str) -> Result<()> {
+        if !rel_path.starts_with("Spaces/") {
+            return Err(anyhow!("only custom Spaces can be deleted"));
+        }
+        let full = self.root.join(rel_path);
+        if full.exists() {
+            fs::remove_file(&full)
+                .with_context(|| format!("failed to delete {}", full.display()))?;
+        }
+        let _ = self.update_master_index();
+        Ok(())
+    }
+
+    /// Open or create a classic BuJo Monthly Log (`Daily Notes/YYYY-MM-monthly.md`)
+    /// containing a Calendar Page overview (`01 Mon`..`31 Wed`) + Monthly Task List.
+    pub fn open_or_create_monthly_log(&self, anchor: NaiveDate) -> Result<Document> {
+        let ym = anchor.format("%Y-%m").to_string();
+        let rel = format!("Daily Notes/{ym}-monthly.md");
+        let full = self.root.join(&rel);
+        if full.exists() {
+            return self.load_document(&rel);
+        }
+
+        let month_start = NaiveDate::from_ymd_opt(anchor.year(), anchor.month(), 1).unwrap_or(anchor);
+        let next_month = if anchor.month() == 12 {
+            NaiveDate::from_ymd_opt(anchor.year() + 1, 1, 1).unwrap_or(anchor)
+        } else {
+            NaiveDate::from_ymd_opt(anchor.year(), anchor.month() + 1, 1).unwrap_or(anchor)
+        };
+        let month_end = next_month - Duration::days(1);
+
+        let mut prose = vec![
+            format!("# {ym} — Monthly Log"),
+            String::new(),
+            "## Calendar Page".to_string(),
+        ];
+        let mut day = month_start;
+        while day <= month_end {
+            let stem = day.format("%Y-%m-%d");
+            let label = day.format("%d %a");
+            prose.push(format!("- {label} · [[{stem}]]"));
+            day += Duration::days(1);
+        }
+        prose.push(String::new());
+        prose.push("## Monthly Task List".to_string());
+        prose.push("Rapid-log tasks for this month below; migrate to Daily Notes as you schedule them.".to_string());
+
+        let doc = Document {
+            path: full,
+            rel_path: rel,
+            title: format!("{ym} Monthly Log"),
+            kind: DocKind::MonthlyLog,
+            date: Some(month_start),
+            page: self.latest_notebook_page(),
+            threaded_pages: vec![],
+            space: None,
+            tags: vec!["bujo".into(), "monthly-log".into()],
+            extra_frontmatter: vec![("month".into(), ym)],
+            entries: vec![],
+            prose_lines: prose,
+        };
+        self.save_document(&doc)?;
+        Ok(doc)
+    }
+
+    /// Schedule an entry into a specific month bucket inside `Future Log.md` (`[YYYY-MM]`).
+    pub fn schedule_to_future_month(
+        &self,
+        source_doc: &mut Document,
+        entry_id: usize,
+        month_ym: &str,
+    ) -> Result<()> {
+        let entry_idx = source_doc
+            .entries
+            .iter()
+            .position(|e| e.id == entry_id)
+            .ok_or_else(|| anyhow!("entry {entry_id} not found"))?;
+
+        let original_text = source_doc.entries[entry_idx].text.clone();
+        source_doc.entries[entry_idx].signifier = Signifier::Scheduled;
+        if !source_doc.entries[entry_idx].text.contains("[[Future Log]]") {
+            source_doc.entries[entry_idx].text =
+                format!("{original_text} → [[Future Log]] [{month_ym}]");
+        }
+        self.save_document(source_doc)?;
+
+        let mut fl_doc = self.load_document("Future Log.md")?;
+        let heading = format!("## {month_ym}");
+        if !fl_doc.prose_lines.iter().any(|l| l.trim() == heading) {
+            fl_doc.prose_lines.push(heading);
+        }
+        let new_id = fl_doc.next_entry_id();
+        let source_stem = source_doc
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("source");
+        fl_doc.entries.push(Entry::new(
+            new_id,
+            Self::now_hhmm(),
+            Signifier::Action,
+            format!("[{month_ym}] {original_text} (from [[{source_stem}]])"),
+        ));
+        self.save_document(&fl_doc)?;
+        Ok(())
+    }
+
+    /// Collect all open `.` Actions from Daily Notes strictly before `before_date`
+    /// (plus Monthly Logs) for the BuJo Batch Migration Triage ritual.
+    pub fn collect_open_actions(&self, before_date: NaiveDate) -> Result<Vec<VaultEntryRef>> {
+        let mut out = Vec::new();
+        let mut files = list_md_files(&self.root.join("Daily Notes"))?;
+        files.sort();
+        files.reverse();
+        for f in files {
+            if f.ends_with("-index.md") {
+                continue;
+            }
+            let rel = format!("Daily Notes/{f}");
+            if let Ok(doc) = self.load_document(&rel) {
+                let include = match doc.kind {
+                    DocKind::Daily => doc.date.map(|d| d < before_date).unwrap_or(false),
+                    DocKind::MonthlyLog => true,
+                    _ => false,
+                };
+                if !include {
+                    continue;
+                }
+                for entry in doc.entries {
+                    if entry.signifier == Signifier::Action {
+                        out.push(VaultEntryRef {
+                            rel_path: doc.rel_path.clone(),
+                            doc_title: doc.title.clone(),
+                            entry,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Apply a single triage action (`today`, `future`, `done`, `cancel`) to an open action
+    /// in `source_rel`.
+    pub fn triage_open_action(
+        &self,
+        source_rel: &str,
+        entry_id: usize,
+        action: &str,
+        today: NaiveDate,
+        default_page: u32,
+    ) -> Result<()> {
+        let mut source_doc = self.load_document(source_rel)?;
+        match action {
+            "today" => {
+                let _ = self.open_or_create_daily(today, default_page)?;
+                let target = Self::daily_rel_path(today);
+                self.migrate_entry(&mut source_doc, entry_id, &target, false)
+            }
+            "future" => {
+                let next_month = Self::upcoming_months(today, 2)
+                    .into_iter()
+                    .nth(1)
+                    .unwrap_or_else(|| today.format("%Y-%m").to_string());
+                self.schedule_to_future_month(&mut source_doc, entry_id, &next_month)
+            }
+            "done" => {
+                if let Some(e) = source_doc.entries.iter_mut().find(|e| e.id == entry_id) {
+                    e.signifier = Signifier::Done;
+                    self.save_document(&source_doc)?;
+                }
+                Ok(())
+            }
+            "cancel" => {
+                if let Some(e) = source_doc.entries.iter_mut().find(|e| e.id == entry_id) {
+                    e.signifier = Signifier::Cancelled;
+                    self.save_document(&source_doc)?;
+                }
+                Ok(())
+            }
+            other => Err(anyhow!("unknown triage action '{other}'")),
+        }
+    }
+
+    /// Collect all `[paper:no]` entries across the entire vault (Daily Notes, Monthly Logs,
+    /// Spaces, and Future Log) for the Global Carry-to-Paper Queue.
+    pub fn collect_paper_pending(&self) -> Result<Vec<VaultEntryRef>> {
+        let mut out = Vec::new();
+        let mut rels = Vec::new();
+
+        let mut daily = list_md_files(&self.root.join("Daily Notes"))?;
+        daily.sort();
+        daily.reverse();
+        for f in daily {
+            if !f.ends_with("-index.md") {
+                rels.push(format!("Daily Notes/{f}"));
+            }
+        }
+        let mut spaces = list_md_files(&self.root.join("Spaces"))?;
+        spaces.sort();
+        for f in spaces {
+            rels.push(format!("Spaces/{f}"));
+        }
+        if self.root.join("Future Log.md").exists() {
+            rels.push("Future Log.md".to_string());
+        }
+
+        for rel in rels {
+            if let Ok(doc) = self.load_document(&rel) {
+                for entry in doc.entries {
+                    if !entry.paper_synced {
+                        out.push(VaultEntryRef {
+                            rel_path: doc.rel_path.clone(),
+                            doc_title: doc.title.clone(),
+                            entry,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Toggle or set `paper_synced` on a specific entry in any vault document.
+    pub fn mark_entry_paper_synced(
+        &self,
+        rel_path: &str,
+        entry_id: usize,
+        synced: bool,
+    ) -> Result<()> {
+        let mut doc = self.load_document(rel_path)?;
+        if let Some(e) = doc.entries.iter_mut().find(|e| e.id == entry_id) {
+            e.paper_synced = synced;
+            self.save_document(&doc)?;
+        }
+        Ok(())
+    }
+
+    /// Mark every `[paper:no]` entry across the entire vault as `[paper:ok]`.
+    pub fn mark_all_vault_paper_synced(&self) -> Result<usize> {
+        let pending = self.collect_paper_pending()?;
+        let mut by_doc: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for item in &pending {
+            by_doc
+                .entry(item.rel_path.clone())
+                .or_default()
+                .push(item.entry.id);
+        }
+        let mut count = 0usize;
+        for (rel, ids) in by_doc {
+            if let Ok(mut doc) = self.load_document(&rel) {
+                for e in &mut doc.entries {
+                    if ids.contains(&e.id) && !e.paper_synced {
+                        e.paper_synced = true;
+                        count += 1;
+                    }
+                }
+                let _ = self.save_document(&doc);
+            }
+        }
+        Ok(count)
+    }
+
     /// Full-text search across all Markdown files in the vault (Daily Notes, Spaces, Reviews, Future Log).
     pub fn search_vault(&self, query: &str) -> Result<Vec<SearchHit>> {
         let needle = query.trim().to_ascii_lowercase();
@@ -681,6 +1002,54 @@ mod tests {
         let tag_hits = vault.search_vault("#studio").unwrap();
         assert_eq!(tag_hits.len(), 1);
         assert_eq!(tag_hits[0].modifier, EntryModifier::Priority);
+    }
+
+    #[test]
+    fn monthly_log_triage_future_buckets_paper_queue_and_manage_spaces() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::open_or_init(dir.path().to_path_buf(), &["Studio & Work".into()]).unwrap();
+
+        // Manage Spaces: rename & delete
+        let renamed = vault.rename_space("Spaces/studio-work.md", "Design Studio").unwrap();
+        assert_eq!(renamed.rel_path, "Spaces/design-studio.md");
+        assert!(!dir.path().join("Spaces/studio-work.md").exists());
+        vault.create_space("Temp Space").unwrap();
+        vault.delete_space("Spaces/temp-space.md").unwrap();
+        assert!(!dir.path().join("Spaces/temp-space.md").exists());
+
+        // Monthly Log (Calendar Page + Task List)
+        let d_past = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let d_today = NaiveDate::from_ymd_opt(2026, 11, 25).unwrap();
+        let monthly = vault.open_or_create_monthly_log(d_today).unwrap();
+        assert_eq!(monthly.kind, DocKind::MonthlyLog);
+        assert!(monthly.prose_lines.iter().any(|l| l.contains("## Calendar Page")));
+
+        // Nested sub-task indentation + Batch Migration Triage
+        let mut past_doc = vault.open_or_create_daily(d_past, 10).unwrap();
+        let id1 = past_doc.add_entry("09:00".into(), Signifier::Action, "Parent task".into());
+        let id2 = past_doc.add_entry("09:05".into(), Signifier::Action, "Child sub-task".into());
+        past_doc.entries[1].indent = 1;
+        vault.save_document(&past_doc).unwrap();
+
+        let reloaded = vault.load_document(&past_doc.rel_path).unwrap();
+        assert_eq!(reloaded.entries[1].indent, 1);
+
+        let open = vault.collect_open_actions(d_today).unwrap();
+        assert_eq!(open.len(), 2);
+
+        // Triage id1 -> today, id2 -> future month bucket
+        vault.triage_open_action(&past_doc.rel_path, id1, "today", d_today, 11).unwrap();
+        let mut past_again = vault.load_document(&past_doc.rel_path).unwrap();
+        vault.schedule_to_future_month(&mut past_again, id2, "2026-12").unwrap();
+        let fl = vault.load_document("Future Log.md").unwrap();
+        assert!(fl.entries.iter().any(|e| e.text.contains("[2026-12]")));
+
+        // Global Carry-to-Paper Queue
+        let pending_before = vault.collect_paper_pending().unwrap();
+        assert!(!pending_before.is_empty());
+        let synced_count = vault.mark_all_vault_paper_synced().unwrap();
+        assert_eq!(synced_count, pending_before.len());
+        assert!(vault.collect_paper_pending().unwrap().is_empty());
     }
 }
 
