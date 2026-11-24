@@ -206,6 +206,14 @@ fn handle_request(
                                 Ok(())
                             }
                         }
+                        "toggle_cancelled" => {
+                            if let Some(e) = doc.entries.iter_mut().find(|e| e.id == body.id) {
+                                e.signifier = e.signifier.toggle_cancelled();
+                                vault.save_document(&doc)
+                            } else {
+                                Ok(())
+                            }
+                        }
                         "toggle_priority" => {
                             if let Some(e) = doc.entries.iter_mut().find(|e| e.id == body.id) {
                                 e.modifier = e.modifier.toggle_priority();

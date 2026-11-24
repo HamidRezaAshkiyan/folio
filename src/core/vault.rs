@@ -42,6 +42,7 @@ impl Vault {
                 kind: DocKind::FutureLog,
                 date: None,
                 page: None,
+                threaded_pages: vec![],
                 space: Some("Future Log".to_string()),
                 tags: vec!["bujo".into(), "future-log".into()],
                 extra_frontmatter: vec![],
@@ -64,6 +65,9 @@ impl Vault {
                 let _ = self.create_space(space_name)?;
             }
         }
+
+        // Maintain Master Vault Index (`Index.md`)
+        let _ = self.update_master_index();
 
         Ok(())
     }
@@ -97,6 +101,7 @@ impl Vault {
             kind: DocKind::Daily,
             date: Some(date),
             page: Some(page),
+            threaded_pages: vec![],
             space: None,
             tags: vec!["bujo".into(), "daily".into()],
             extra_frontmatter: vec![],
@@ -128,6 +133,9 @@ impl Vault {
         {
             let _ = self.update_monthly_index(date);
         }
+        if !doc.rel_path.eq_ignore_ascii_case("Index.md") {
+            let _ = self.update_master_index();
+        }
         Ok(())
     }
 
@@ -152,6 +160,7 @@ impl Vault {
             kind: DocKind::Space,
             date: None,
             page: None,
+            threaded_pages: vec![],
             space: Some(trimmed.to_string()),
             tags: vec!["bujo".into(), "space".into(), slug],
             extra_frontmatter: vec![],
@@ -269,7 +278,15 @@ impl Vault {
             });
         }
 
-        // Root Future Log.md
+        // Root Index.md & Future Log.md
+        if self.root.join("Index.md").exists() {
+            nodes.push(VaultFileNode {
+                label: "Index.md".to_string(),
+                rel_path: "Index.md".to_string(),
+                is_dir: false,
+                depth: 0,
+            });
+        }
         if self.root.join("Future Log.md").exists() {
             nodes.push(VaultFileNode {
                 label: "Future Log.md".to_string(),
@@ -390,6 +407,7 @@ impl Vault {
             kind: DocKind::Index,
             date: None,
             page: None,
+            threaded_pages: vec![],
             space: None,
             tags: vec!["bujo".into(), "index".into()],
             extra_frontmatter: vec![("month".into(), ym)],
@@ -399,6 +417,115 @@ impl Vault {
         let content = serialize_markdown(&doc);
         fs::write(&doc.path, content)?;
         Ok(())
+    }
+
+    /// Auto-maintain the Master Vault Index (`Index.md`) with Obsidian wikilinks
+    /// and Bullet Journal Threading (physical notebook page numbers across collections & months).
+    pub fn update_master_index(&self) -> Result<Document> {
+        let index_rel = "Index.md".to_string();
+        let index_full = self.root.join(&index_rel);
+
+        let mut prose = vec![
+            "# Master Index".to_string(),
+            "Auto-maintained Bullet Journal Master Index & Page Threading.".to_string(),
+            String::new(),
+        ];
+
+        // Future Log
+        if self.root.join("Future Log.md").exists() {
+            let fl_pages = self
+                .load_document("Future Log.md")
+                .map(|d| d.format_pages())
+                .unwrap_or_else(|_| "—".to_string());
+            let fl_count = self
+                .load_document("Future Log.md")
+                .map(|d| d.entries.len())
+                .unwrap_or(0);
+            prose.push("## Future Log".to_string());
+            prose.push("| Log | Notebook Pages | Entries |".to_string());
+            prose.push("| --- | --- | --- |".to_string());
+            prose.push(format!("| [[Future Log]] | {fl_pages} | {fl_count} |"));
+            prose.push(String::new());
+        }
+
+        // Collections / Spaces (with Threading)
+        prose.push("## Collections (Spaces & Threading)".to_string());
+        prose.push("| Collection | Threaded Pages | Entries |".to_string());
+        prose.push("| --- | --- | --- |".to_string());
+        let mut space_files = list_md_files(&self.root.join("Spaces"))?;
+        space_files.sort();
+        for f in space_files {
+            let stem = f.trim_end_matches(".md");
+            let rel = format!("Spaces/{f}");
+            if let Ok(doc) = self.load_document(&rel) {
+                let pages = doc.format_pages();
+                let count = doc.entries.len();
+                prose.push(format!("| [[{stem}\\|{}]] | {pages} | {count} |", doc.title));
+            }
+        }
+        prose.push(String::new());
+
+        // Monthly Logs / Daily Notes grouped by YYYY-MM
+        let mut months: BTreeMap<String, (Vec<u32>, usize)> = BTreeMap::new();
+        let daily_files = list_md_files(&self.root.join("Daily Notes"))?;
+        for f in daily_files {
+            if f.ends_with("-index.md") || f.len() < 7 {
+                continue;
+            }
+            let ym = f[0..7].to_string();
+            let entry = months.entry(ym).or_insert_with(|| (Vec::new(), 0));
+            entry.1 += 1;
+            if let Ok(doc) = self.load_document(&format!("Daily Notes/{f}")) {
+                for p in doc.all_pages() {
+                    if !entry.0.contains(&p) {
+                        entry.0.push(p);
+                    }
+                }
+            }
+        }
+        prose.push("## Monthly Logs".to_string());
+        prose.push("| Month | Notebook Page Range | Daily Notes |".to_string());
+        prose.push("| --- | --- | --- |".to_string());
+        for (ym, (mut pages, day_count)) in months.into_iter().rev() {
+            pages.sort_unstable();
+            let range_str = match (pages.first(), pages.last()) {
+                (Some(a), Some(b)) if a == b => format!("p. {a}"),
+                (Some(a), Some(b)) => format!("p. {a}–{b}"),
+                _ => "—".to_string(),
+            };
+            prose.push(format!("| [[{ym}-index\\|{ym}]] | {range_str} | {day_count} |"));
+        }
+        prose.push(String::new());
+
+        // Reviews
+        let mut review_files = list_md_files(&self.root.join("Reviews"))?;
+        review_files.sort();
+        review_files.reverse();
+        if !review_files.is_empty() {
+            prose.push("## Reviews".to_string());
+            for f in review_files {
+                let stem = f.trim_end_matches(".md");
+                prose.push(format!("- [[{stem}]]"));
+            }
+        }
+
+        let doc = Document {
+            path: index_full,
+            rel_path: index_rel,
+            title: "Master Index".to_string(),
+            kind: DocKind::Index,
+            date: None,
+            page: None,
+            threaded_pages: vec![],
+            space: None,
+            tags: vec!["bujo".into(), "master-index".into()],
+            extra_frontmatter: vec![],
+            entries: vec![],
+            prose_lines: prose,
+        };
+        let content = serialize_markdown(&doc);
+        fs::write(&doc.path, content)?;
+        Ok(doc)
     }
 
     /// Migrate an entry from `source_doc` to `target_rel_path` (e.g. tomorrow's daily note, a space, or `Future Log.md`).

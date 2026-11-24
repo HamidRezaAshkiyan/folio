@@ -88,6 +88,14 @@ impl Signifier {
         }
     }
 
+    /// Toggle Irrelevant / Cancelled (`~`) state.
+    pub fn toggle_cancelled(self) -> Self {
+        match self {
+            Signifier::Cancelled => Signifier::Action,
+            _ => Signifier::Cancelled,
+        }
+    }
+
     pub fn matches_filter(&self, filter: EntryFilter) -> bool {
         match filter {
             EntryFilter::All => true,
@@ -240,6 +248,9 @@ pub struct Document {
     pub kind: DocKind,
     pub date: Option<NaiveDate>,
     pub page: Option<u32>,
+    /// Additional physical notebook pages for BuJo Threading (e.g. `p. 12, 28, 45`).
+    #[serde(default)]
+    pub threaded_pages: Vec<u32>,
     pub space: Option<String>,
     pub tags: Vec<String>,
     pub extra_frontmatter: Vec<(String, String)>,
@@ -287,6 +298,52 @@ impl Document {
         }
         all.sort();
         all
+    }
+
+    /// Return all unique physical notebook page numbers associated with this document
+    /// (primary `page` + `threaded_pages`), sorted ascending.
+    pub fn all_pages(&self) -> Vec<u32> {
+        let mut pages = Vec::new();
+        if let Some(p) = self.page {
+            pages.push(p);
+        }
+        for &p in &self.threaded_pages {
+            if !pages.contains(&p) {
+                pages.push(p);
+            }
+        }
+        pages.sort_unstable();
+        pages
+    }
+
+    /// Add a threaded physical notebook page (BuJo Threading) to this document.
+    pub fn add_threaded_page(&mut self, page: u32) {
+        if page == 0 {
+            return;
+        }
+        if self.page.is_none() {
+            self.page = Some(page);
+            return;
+        }
+        if self.page != Some(page) && !self.threaded_pages.contains(&page) {
+            self.threaded_pages.push(page);
+            self.threaded_pages.sort_unstable();
+        }
+    }
+
+    /// Format physical notebook pages as `p. 12, 28, 45` or `—`.
+    pub fn format_pages(&self) -> String {
+        let pages = self.all_pages();
+        if pages.is_empty() {
+            "—".to_string()
+        } else {
+            let joined = pages
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("p. {joined}")
+        }
     }
 }
 
@@ -463,5 +520,31 @@ mod tests {
         assert_eq!(tags, vec!["#کار".to_string(), "#studio".to_string()]);
         assert!(entry.has_tag("#کار"));
         assert!(entry.has_tag("studio"));
+    }
+
+    #[test]
+    fn toggles_cancelled_and_threads_pages() {
+        assert_eq!(Signifier::Action.toggle_cancelled(), Signifier::Cancelled);
+        assert_eq!(Signifier::Cancelled.toggle_cancelled(), Signifier::Action);
+
+        let mut doc = Document {
+            path: PathBuf::from("Spaces/studio-work.md"),
+            rel_path: "Spaces/studio-work.md".into(),
+            title: "Studio & Work".into(),
+            kind: DocKind::Space,
+            date: None,
+            page: Some(12),
+            threaded_pages: vec![],
+            space: Some("Studio & Work".into()),
+            tags: vec![],
+            extra_frontmatter: vec![],
+            entries: vec![],
+            prose_lines: vec![],
+        };
+        doc.add_threaded_page(45);
+        doc.add_threaded_page(28);
+        doc.add_threaded_page(12); // duplicate ignored
+        assert_eq!(doc.all_pages(), vec![12, 28, 45]);
+        assert_eq!(doc.format_pages(), "p. 12, 28, 45");
     }
 }

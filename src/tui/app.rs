@@ -684,6 +684,23 @@ impl App {
                     self.status_msg = Some("Usage: :page <number>".into());
                 }
             }
+            "thread" => {
+                if let Ok(p) = arg.parse::<u32>() {
+                    self.doc.add_threaded_page(p);
+                    self.dirty = true;
+                    self.save_current();
+                    self.status_msg = Some(format!("Threaded page p. {p} ({})", self.doc.format_pages()));
+                } else {
+                    self.status_msg = Some("Usage: :thread <page-number>".into());
+                }
+            }
+            "index" => match self.vault.update_master_index() {
+                Ok(_) => {
+                    self.open_rel_path("Index.md");
+                    self.status_msg = Some("Opened Master Index (Index.md)".into());
+                }
+                Err(e) => self.status_msg = Some(format!("Index error: {e}")),
+            },
             "space" => {
                 if arg.is_empty() {
                     self.status_msg = Some("Usage: :space <Space Name>".into());
@@ -930,6 +947,20 @@ impl App {
                     self.doc.entries[real_idx].signifier = cur.toggle_done();
                     self.dirty = true;
                     self.save_current();
+                }
+            }
+            // `~` toggles Cancelled / Irrelevant (`~`)
+            KeyCode::Char('~') => {
+                if let Some((real_idx, _)) = self
+                    .filtered_entries()
+                    .get(self.selected_entry_idx)
+                    .map(|(i, e)| (*i, *e))
+                {
+                    let cur = self.doc.entries[real_idx].signifier;
+                    self.doc.entries[real_idx].signifier = cur.toggle_cancelled();
+                    self.dirty = true;
+                    self.save_current();
+                    self.status_msg = Some("Toggled Cancelled (~)".into());
                 }
             }
             // `*` toggles Priority modifier

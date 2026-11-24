@@ -198,6 +198,7 @@ fn build_review_doc(
         kind: DocKind::Review,
         date: Some(end),
         page: None,
+        threaded_pages: vec![],
         space: None,
         tags: vec!["bujo".into(), tag.into()],
         extra_frontmatter: vec![

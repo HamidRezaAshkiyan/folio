@@ -94,6 +94,8 @@ enum Commands {
         /// Search query (text or #tag)
         query: Vec<String>,
     },
+    /// Refresh and print the Master Vault Index (Index.md) with Page Threading
+    Index,
 }
 
 fn main() -> Result<()> {
@@ -215,6 +217,13 @@ fn handle_subcommand(vault: &Vault, default_page: u32, cmd: Commands) -> Result<
                         hit.snippet
                     );
                 }
+            }
+        }
+        Commands::Index => {
+            let doc = vault.update_master_index()?;
+            println!("Master Index updated: {}", doc.path.display());
+            for line in &doc.prose_lines {
+                println!("{line}");
             }
         }
     }

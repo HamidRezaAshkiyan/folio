@@ -6,6 +6,7 @@ use std::path::Path;
 pub fn parse_markdown(path: &Path, rel_path: &str, raw: &str) -> Document {
     let mut date: Option<NaiveDate> = None;
     let mut page: Option<u32> = None;
+    let mut threaded_pages: Vec<u32> = Vec::new();
     let mut space: Option<String> = None;
     let mut title_fm: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
@@ -46,6 +47,18 @@ pub fn parse_markdown(path: &Path, rel_path: &str, raw: &str) -> Document {
                     }
                     "page" => {
                         page = val.parse::<u32>().ok();
+                    }
+                    "pages" => {
+                        let stripped = val.trim_start_matches('[').trim_end_matches(']');
+                        for part in stripped.split(',') {
+                            if let Ok(num) = part.trim().parse::<u32>()
+                                && num > 0
+                                && !threaded_pages.contains(&num)
+                            {
+                                threaded_pages.push(num);
+                            }
+                        }
+                        threaded_pages.sort_unstable();
                     }
                     "space" => {
                         if !val.is_empty() {
@@ -126,6 +139,7 @@ pub fn parse_markdown(path: &Path, rel_path: &str, raw: &str) -> Document {
         kind,
         date,
         page,
+        threaded_pages,
         space,
         tags,
         extra_frontmatter,
@@ -136,7 +150,7 @@ pub fn parse_markdown(path: &Path, rel_path: &str, raw: &str) -> Document {
 
 pub fn infer_doc_kind(rel_path: &str) -> DocKind {
     let norm = rel_path.replace('\\', "/");
-    if norm.ends_with("-index.md") {
+    if norm.eq_ignore_ascii_case("Index.md") || norm.ends_with("-index.md") {
         DocKind::Index
     } else if norm.starts_with("Daily Notes/") {
         DocKind::Daily
@@ -275,6 +289,7 @@ pub fn serialize_markdown(doc: &Document) -> String {
     let mut out = String::new();
     let has_fm = doc.date.is_some()
         || doc.page.is_some()
+        || !doc.threaded_pages.is_empty()
         || doc.space.is_some()
         || !doc.tags.is_empty()
         || !doc.extra_frontmatter.is_empty();
@@ -286,6 +301,15 @@ pub fn serialize_markdown(doc: &Document) -> String {
         }
         if let Some(p) = doc.page {
             out.push_str(&format!("page: {p}\n"));
+        }
+        if !doc.threaded_pages.is_empty() {
+            let list = doc
+                .threaded_pages
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("pages: [{list}]\n"));
         }
         if let Some(s) = &doc.space {
             out.push_str(&format!("space: {s}\n"));

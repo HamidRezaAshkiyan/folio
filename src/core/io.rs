@@ -282,6 +282,7 @@ mod tests {
             kind: DocKind::Daily,
             date: None,
             page: Some(42),
+            threaded_pages: vec![],
             space: None,
             tags: vec![],
             extra_frontmatter: vec![],

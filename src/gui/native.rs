@@ -102,8 +102,9 @@ struct FolioApp {
     editing_text: String,
     migrating_entry_id: Option<usize>,
 
-    // New space & search
+    // New space, threading & search
     new_space_name: String,
+    thread_page_input: String,
     search_query: String,
     search_hits: Vec<SearchHit>,
 
@@ -120,8 +121,11 @@ enum Message {
 
     // Navigation
     OpenDoc(String),
+    OpenMasterIndex,
     NavDay(i64),
     AdjustPage(i32),
+    ThreadPageChanged(String),
+    AddThreadedPage,
     GenerateReview(bool), // true = weekly, false = monthly
 
     // Composer
@@ -136,6 +140,7 @@ enum Message {
 
     // Entry actions
     ToggleEntryDone(usize),
+    ToggleEntryCancelled(usize),
     ToggleEntryPaper(usize),
     ToggleEntryPriority(usize),
     ToggleEntryInspiration(usize),
@@ -229,6 +234,7 @@ impl FolioApp {
             editing_text: String::new(),
             migrating_entry_id: None,
             new_space_name: String::new(),
+            thread_page_input: String::new(),
             search_query: String::new(),
             search_hits: Vec::new(),
             status_msg: None,
@@ -236,7 +242,7 @@ impl FolioApp {
     }
 
     fn title(&self) -> String {
-        format!("Folio — {}", self.doc.title)
+        format!("Folio v{} — {}", env!("CARGO_PKG_VERSION"), self.doc.title)
     }
 
     fn theme(&self) -> Theme {
@@ -338,6 +344,19 @@ impl FolioApp {
                     self.status_msg = Some(format!("Could not open {rel_path}: {e}"));
                 }
             },
+            Message::OpenMasterIndex => match self.vault.update_master_index() {
+                Ok(doc) => {
+                    self.doc = doc;
+                    self.editing_entry_id = None;
+                    self.migrating_entry_id = None;
+                    self.tag_filter = None;
+                    self.refresh_metadata();
+                    self.status_msg = Some("Refreshed Master Index (Index.md)".to_string());
+                }
+                Err(e) => {
+                    self.status_msg = Some(format!("Master Index error: {e}"));
+                }
+            },
             Message::NavDay(delta) => {
                 let target_date = if delta == 0 {
                     Vault::today_date()
@@ -365,6 +384,25 @@ impl FolioApp {
                 self.config.notebook_page = next;
                 self.persist_config();
                 self.save_current_doc();
+            }
+            Message::ThreadPageChanged(val) => {
+                self.thread_page_input = val;
+            }
+            Message::AddThreadedPage => {
+                let target_page = self
+                    .thread_page_input
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|&p| p > 0)
+                    .unwrap_or(self.config.notebook_page);
+                self.doc.add_threaded_page(target_page);
+                self.thread_page_input.clear();
+                self.save_current_doc();
+                self.status_msg = Some(format!(
+                    "Threaded page p.{target_page} ({})",
+                    self.doc.format_pages()
+                ));
             }
             Message::GenerateReview(weekly) => {
                 let today = Vault::today_date();
@@ -436,6 +474,12 @@ impl FolioApp {
             Message::ToggleEntryDone(id) => {
                 if let Some(entry) = self.doc.entries.iter_mut().find(|e| e.id == id) {
                     entry.signifier = entry.signifier.toggle_done();
+                    self.save_current_doc();
+                }
+            }
+            Message::ToggleEntryCancelled(id) => {
+                if let Some(entry) = self.doc.entries.iter_mut().find(|e| e.id == id) {
+                    entry.signifier = entry.signifier.toggle_cancelled();
                     self.save_current_doc();
                 }
             }
@@ -598,6 +642,34 @@ impl FolioApp {
 
         root_col = root_col.push(body);
 
+        // Footer status bar with version, vault root, and direction mode
+        let footer = container(
+            row![
+                text(format!("Folio v{}", env!("CARGO_PKG_VERSION")))
+                    .size(11)
+                    .color(p.primary),
+                text(format!("· Vault: {}", self.vault.display_root()))
+                    .size(11)
+                    .color(p.on_surface_variant)
+                    .shaping(text::Shaping::Advanced),
+                Space::new().width(Length::Fill),
+                text(format!(
+                    "Dir: {} · {}",
+                    self.rtl_mode.label(),
+                    if self.is_dark { "Dark" } else { "Light" }
+                ))
+                .size(11)
+                .color(p.on_surface_variant),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([4, 10])
+        .style(move |_| pane_style(p.surface_low, p.outline_variant));
+
+        root_col = root_col.push(footer);
+
         container(root_col)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -673,6 +745,12 @@ impl FolioApp {
         .align_y(Alignment::Center);
 
         let reviews = row![
+            pill_button(
+                "Index",
+                self.doc.rel_path.eq_ignore_ascii_case("Index.md"),
+                p,
+                Message::OpenMasterIndex,
+            ),
             pill_button("Weekly", false, p, Message::GenerateReview(true)),
             pill_button("Monthly", false, p, Message::GenerateReview(false)),
         ]
@@ -915,18 +993,46 @@ impl FolioApp {
             .shaping(text::Shaping::Advanced);
 
         let pending = self.doc.paper_pending_count();
+        let pages_str = self.doc.format_pages();
         let meta_txt = text(format!(
-            "{} entries · {} pending paper",
+            "{} · {} entries · {} pending paper",
+            pages_str,
             self.doc.entries.len(),
             pending
         ))
         .size(11)
         .color(p.on_surface_variant);
 
+        let thread_in = text_input("p.#", &self.thread_page_input)
+            .on_input(Message::ThreadPageChanged)
+            .on_submit(Message::AddThreadedPage)
+            .size(11)
+            .padding([3, 6])
+            .width(Length::Fixed(52.0))
+            .style(move |_, status| input_style(p, status));
+        let thread_btn = pill_button("+ Thread", false, p, Message::AddThreadedPage);
+        let thread_ctrl = row![thread_in, thread_btn]
+            .spacing(4)
+            .align_y(Alignment::Center);
+
         let doc_header = if doc_rtl {
-            row![meta_txt, Space::new().width(Length::Fill), title_txt].align_y(Alignment::Center)
+            row![
+                thread_ctrl,
+                meta_txt,
+                Space::new().width(Length::Fill),
+                title_txt
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
         } else {
-            row![title_txt, Space::new().width(Length::Fill), meta_txt].align_y(Alignment::Center)
+            row![
+                title_txt,
+                Space::new().width(Length::Fill),
+                meta_txt,
+                thread_ctrl
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
         };
 
         // Filter bar (Signifiers + Inline #tags)
@@ -1201,7 +1307,13 @@ impl FolioApp {
             p.on_surface
         };
 
-        let body_txt = text(entry.text.clone())
+        let body_display = if entry.signifier == Signifier::Cancelled {
+            format!("~~ {} ~~", entry.text)
+        } else {
+            entry.text.clone()
+        };
+
+        let body_txt = text(body_display)
             .size(13)
             .color(text_color)
             .shaping(text::Shaping::Advanced)
@@ -1214,6 +1326,12 @@ impl FolioApp {
 
         let paper_label = if entry.paper_synced { "ok" } else { "paper" };
         let actions = row![
+            mini_btn(
+                "~",
+                entry.signifier == Signifier::Cancelled,
+                p,
+                Message::ToggleEntryCancelled(entry.id),
+            ),
             mini_btn(
                 "*",
                 entry.modifier == EntryModifier::Priority,
@@ -1338,6 +1456,7 @@ impl FolioApp {
         let sig_lines = [
             (".", "Action (task)"),
             ("×", "Completed"),
+            ("~", "Cancelled / Irrelevant"),
             (">", "Migrated"),
             ("<", "Scheduled"),
             ("o", "Event"),
