@@ -5,6 +5,7 @@ edition = "2024"
 description = "Minimalistic cross-platform Bullet Journal companion (TUI + GUI) backed by Obsidian-compatible Markdown"
 license = "MIT"
 repository = "https://github.com/HamidRezaAshkiyan/folio"
+homepage = "https://hamidrezaashkiyan.github.io/folio/"
 keywords = ["bullet-journal", "bujo", "tui", "obsidian", "markdown"]
 categories = ["command-line-utilities"]
 

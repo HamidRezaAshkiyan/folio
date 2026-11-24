@@ -4,6 +4,8 @@ Minimalistic, cross-platform **Bullet Journal (BuJo)** companion app with a **Ra
 
 Designed for rapid logging when you don't have your physical notebook handy — with a built-in **Carry to Paper** queue (`[paper:no]` / `[paper:ok]`) so you can transcribe entries back into your analog spread.
 
+**Website & Interactive Preview:** [hamidrezaashkiyan.github.io/folio](https://hamidrezaashkiyan.github.io/folio/)
+
 ---
 
 ## Features
