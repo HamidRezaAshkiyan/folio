@@ -36,7 +36,7 @@ jobs:
       - name: Build Universal macOS Folio.app & .pkg installer
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          VERSION="${VERSION:-1.8.0}"
+          VERSION="${VERSION:-1.9.0}"
           mkdir -p pkgroot/usr/local/bin
           lipo -create \
             target/aarch64-apple-darwin/release/folio \

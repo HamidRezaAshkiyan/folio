@@ -29,6 +29,10 @@ fn default_gui_theme() -> String {
     "dark".to_string()
 }
 
+fn default_persian_font() -> String {
+    "vazirmatn".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolioConfig {
     pub vault_path: PathBuf,
@@ -38,6 +42,8 @@ pub struct FolioConfig {
     pub rtl_mode: RtlMode,
     #[serde(default = "default_gui_theme")]
     pub gui_theme: String,
+    #[serde(default = "default_persian_font")]
+    pub persian_font: String,
 }
 
 impl Default for FolioConfig {
@@ -53,6 +59,7 @@ impl Default for FolioConfig {
             ],
             rtl_mode: RtlMode::Auto,
             gui_theme: default_gui_theme(),
+            persian_font: default_persian_font(),
         }
     }
 }

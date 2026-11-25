@@ -15,13 +15,18 @@ use iced::widget::{
     Column, Row, Space, button, column, container, image, operation, row, scrollable, text,
     text_input,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Subscription, Task, Theme, window};
+use iced::{
+    Alignment, Border, Color, Element, Font, Length, Padding, Shadow, Subscription, Task, Theme,
+    window,
+};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-128.png");
 const COMPOSER_ID: &str = "folio_composer";
 const SEARCH_ID: &str = "folio_search";
+const OPEN_FONTS_INSTALLER_URL: &str = "https://github.com/HamidRezaAshkiyan/open-fonts-installer";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActivePanel {
@@ -103,6 +108,9 @@ struct FolioApp {
 
     // UI preferences & panels
     rtl_mode: RtlMode,
+    persian_font: String,
+    has_vazirmatn: bool,
+    has_dastkhat: bool,
     is_dark: bool,
     show_md_preview: bool,
     active_panel: ActivePanel,
@@ -152,6 +160,8 @@ enum Message {
     // Preferences & Panels
     SetRtlMode(RtlMode),
     CycleRtlMode,
+    TogglePersianFont,
+    InstallPersianFonts,
     ToggleTheme,
     ToggleMdPreview,
     TogglePanel(ActivePanel),
@@ -292,6 +302,8 @@ impl FolioApp {
         let open_triage = vault.collect_open_actions(today).unwrap_or_default();
         let global_paper = vault.collect_paper_pending().unwrap_or_default();
         let rtl_mode = config.rtl_mode;
+        let persian_font = config.persian_font.clone();
+        let (has_vazirmatn, has_dastkhat) = detect_installed_persian_fonts();
         let is_dark = config.gui_theme != "light";
 
         Self {
@@ -306,6 +318,9 @@ impl FolioApp {
             global_paper,
             icon_handle: image::Handle::from_bytes(ICON_PNG.to_vec()),
             rtl_mode,
+            persian_font,
+            has_vazirmatn,
+            has_dastkhat,
             is_dark,
             show_md_preview: true,
             active_panel: ActivePanel::None,
@@ -384,6 +399,63 @@ impl FolioApp {
         }
     }
 
+    fn tr<'a>(&self, en: &'a str, fa: &'a str) -> &'a str {
+        if self.is_ui_rtl() { fa } else { en }
+    }
+
+    fn persian_text_font(&self) -> Font {
+        if self.persian_font.eq_ignore_ascii_case("dastkhat") {
+            if self.has_dastkhat {
+                return Font::with_name("Dastkhat");
+            }
+            if self.has_vazirmatn {
+                return Font::with_name("Vazirmatn");
+            }
+        } else {
+            if self.has_vazirmatn {
+                return Font::with_name("Vazirmatn");
+            }
+            if self.has_dastkhat {
+                return Font::with_name("Dastkhat");
+            }
+        }
+        Font::DEFAULT
+    }
+
+    fn active_ui_font(&self) -> Font {
+        if self.is_ui_rtl() {
+            self.persian_text_font()
+        } else {
+            Font::DEFAULT
+        }
+    }
+
+    fn persian_font_label(&self) -> &'static str {
+        if self.persian_font.eq_ignore_ascii_case("dastkhat") && self.has_dastkhat {
+            "دست‌خط"
+        } else if self.has_vazirmatn {
+            "وزیرمتن"
+        } else if self.has_dastkhat {
+            "دست‌خط"
+        } else {
+            "فونت"
+        }
+    }
+
+    fn filter_label(&self, f: EntryFilter) -> &'static str {
+        if self.is_ui_rtl() {
+            match f {
+                EntryFilter::All => "همه",
+                EntryFilter::Action => "کار (.)",
+                EntryFilter::Event => "رویداد (o)",
+                EntryFilter::Emotion => "احساس (=)",
+                EntryFilter::Note => "یادداشت (-)",
+            }
+        } else {
+            f.label()
+        }
+    }
+
     fn refresh_metadata(&mut self) {
         let today = Vault::today_date();
         self.raw_markdown = serialize_markdown(&self.doc);
@@ -420,6 +492,7 @@ impl FolioApp {
 
     fn persist_config(&mut self) {
         self.config.rtl_mode = self.rtl_mode;
+        self.config.persian_font = self.persian_font.clone();
         self.config.gui_theme = if self.is_dark { "dark" } else { "light" }.to_string();
         let _ = self.config.save();
     }
@@ -469,8 +542,14 @@ impl FolioApp {
                 self.rtl_mode = mode;
                 self.persist_config();
                 self.status_msg = Some(match mode {
-                    RtlMode::Auto => "Direction: AUTO (detects RTL per entry)".to_string(),
-                    RtlMode::Rtl => "Direction: RTL (full mirrored layout)".to_string(),
+                    RtlMode::Auto => "Direction: AUTO (aligned columns, auto-RTL text)".to_string(),
+                    RtlMode::Rtl => {
+                        if !self.has_vazirmatn && !self.has_dastkhat {
+                            "رابط فارسی فعال شد — برای نمایش بهتر، فونت وزیرمتن یا دست‌خط را نصب کنید".to_string()
+                        } else {
+                            format!("رابط فارسی فعال شد (فونت: {})", self.persian_font_label())
+                        }
+                    }
                     RtlMode::Ltr => "Direction: LTR (standard left-to-right)".to_string(),
                 });
             }
@@ -481,6 +560,26 @@ impl FolioApp {
                     RtlMode::Rtl => RtlMode::Ltr,
                 };
                 return self.update(Message::SetRtlMode(next));
+            }
+            Message::TogglePersianFont => {
+                self.persian_font = if self.persian_font.eq_ignore_ascii_case("vazirmatn") {
+                    "dastkhat".to_string()
+                } else {
+                    "vazirmatn".to_string()
+                };
+                self.persist_config();
+                self.status_msg = Some(format!("فونت فارسی: {}", self.persian_font_label()));
+            }
+            Message::InstallPersianFonts => {
+                match install_persian_fonts_via_open_fonts_installer() {
+                    Ok(msg) => self.status_msg = Some(msg),
+                    Err(e) => {
+                        let _ = open::that(OPEN_FONTS_INSTALLER_URL);
+                        self.status_msg = Some(format!(
+                            "Opened open-fonts-installer ({e})"
+                        ));
+                    }
+                }
             }
             Message::ToggleTheme => {
                 self.is_dark = !self.is_dark;
@@ -1001,11 +1100,12 @@ impl FolioApp {
     fn view(&self) -> Element<'_, Message> {
         let p = self.palette();
         let ui_rtl = self.is_ui_rtl();
+        let ui_font = self.active_ui_font();
 
-        let top_bar = self.view_top_bar(p, ui_rtl);
-        let left_nav = self.view_nav_pane(p, ui_rtl);
-        let center_log = self.view_rapid_log_pane(p, ui_rtl);
-        let right_inspector = self.view_inspector_pane(p, ui_rtl);
+        let top_bar = self.view_top_bar(p, ui_rtl, ui_font);
+        let left_nav = self.view_nav_pane(p, ui_rtl, ui_font);
+        let center_log = self.view_rapid_log_pane(p, ui_rtl, ui_font);
+        let right_inspector = self.view_inspector_pane(p, ui_rtl, ui_font);
 
         let body: Row<'_, Message> = if ui_rtl {
             row![right_inspector, center_log, left_nav]
@@ -1019,22 +1119,50 @@ impl FolioApp {
 
         let mut root_col = column![top_bar].spacing(8);
 
+        // If Persian UI is active and neither Vazirmatn nor Dastkhat is installed,
+        // offer a zero-bloat one-click installer powered by open-fonts-installer.
+        if ui_rtl && !self.has_vazirmatn && !self.has_dastkhat {
+            let install_banner = container(
+                row![
+                    pill_button(
+                        "نصب فونت وزیرمتن / دست‌خط (open-fonts-installer)",
+                        true,
+                        p,
+                        ui_font,
+                        Message::InstallPersianFonts,
+                    ),
+                    Space::new().width(Length::Fill),
+                    text("فونت فارسی وزیرمتن یا دست‌خط روی سیستم یافت نشد — برای نمایش بهتر بدون افزایش حجم برنامه نصب کنید:")
+                        .size(11)
+                        .color(p.tertiary)
+                        .font(ui_font)
+                        .shaping(text::Shaping::Advanced),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([5, 10])
+            .style(move |_| pane_style(p.surface_container, p.tertiary));
+            root_col = root_col.push(install_banner);
+        }
+
         if !self.search_hits.is_empty() {
-            root_col = root_col.push(self.view_search_results(p, ui_rtl));
+            root_col = root_col.push(self.view_search_results(p, ui_rtl, ui_font));
         }
 
         match self.active_panel {
             ActivePanel::MigrationTriage => {
-                root_col = root_col.push(self.view_triage_panel(p, ui_rtl));
+                root_col = root_col.push(self.view_triage_panel(p, ui_rtl, ui_font));
             }
             ActivePanel::GlobalPaperQueue => {
-                root_col = root_col.push(self.view_global_paper_panel(p, ui_rtl));
+                root_col = root_col.push(self.view_global_paper_panel(p, ui_rtl, ui_font));
             }
             ActivePanel::Reflect => {
-                root_col = root_col.push(self.view_reflect_panel(p, ui_rtl));
+                root_col = root_col.push(self.view_reflect_panel(p, ui_rtl, ui_font));
             }
             ActivePanel::ImportExport => {
-                root_col = root_col.push(self.view_import_export_panel(p, ui_rtl));
+                root_col = root_col.push(self.view_import_export_panel(p, ui_rtl, ui_font));
             }
             ActivePanel::None => {}
         }
@@ -1045,7 +1173,14 @@ impl FolioApp {
                     text(msg.clone())
                         .size(12)
                         .color(p.tertiary)
-                        .shaping(text::Shaping::Advanced),
+                        .font(ui_font)
+                        .shaping(text::Shaping::Advanced)
+                        .width(Length::Fill)
+                        .align_x(if ui_rtl {
+                            Horizontal::Right
+                        } else {
+                            Horizontal::Left
+                        }),
                 )
                 .width(Length::Fill)
                 .padding([4, 12])
@@ -1056,33 +1191,79 @@ impl FolioApp {
         root_col = root_col.push(body);
 
         // Footer status bar with version, shortcuts hint, vault root, and direction mode
-        let footer = container(
+        let brand_footer = text(format!(
+            "{} v{}",
+            self.tr("Folio", "فولیو"),
+            env!("CARGO_PKG_VERSION")
+        ))
+        .size(11)
+        .color(p.primary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let vault_footer = text(format!(
+            "· {}: {}",
+            self.tr("Vault", "بایگانی"),
+            self.vault.display_root()
+        ))
+        .size(11)
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let shortcuts_footer = text(self.tr(
+            "Shortcuts: ⌘N Log · ⌘F Search · ⌘[ / ⌘] Day · ⌘T Today · ⌘I Index · ⌘M Triage · ⌘⇧R RTL",
+            "میانبرها: ⌘N ثبت · ⌘F جستجو · ⌘[ / ⌘] روز · ⌘T امروز · ⌘I فهرست · ⌘M بررسی · ⌘⇧R زبان",
+        ))
+        .size(10)
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let mode_footer = text(if ui_rtl {
+            format!(
+                "· فارسی ({}) · {}",
+                self.persian_font_label(),
+                if self.is_dark { "تیره" } else { "روشن" }
+            )
+        } else {
+            format!(
+                "· Dir: {} · {}",
+                self.rtl_mode.label(),
+                if self.is_dark { "Dark" } else { "Light" }
+            )
+        })
+        .size(11)
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let footer_row = if ui_rtl {
             row![
-                text(format!("Folio v{}", env!("CARGO_PKG_VERSION")))
-                    .size(11)
-                    .color(p.primary),
-                text(format!("· Vault: {}", self.vault.display_root()))
-                    .size(11)
-                    .color(p.on_surface_variant)
-                    .shaping(text::Shaping::Advanced),
+                mode_footer,
+                shortcuts_footer,
                 Space::new().width(Length::Fill),
-                text("Shortcuts: ⌘N Log · ⌘F Search · ⌘[ / ⌘] Day · ⌘T Today · ⌘I Index · ⌘M Triage · ⌘⇧R RTL")
-                    .size(10)
-                    .color(p.on_surface_variant),
-                text(format!(
-                    "· Dir: {} · {}",
-                    self.rtl_mode.label(),
-                    if self.is_dark { "Dark" } else { "Light" }
-                ))
-                .size(11)
-                .color(p.on_surface_variant),
+                vault_footer,
+                brand_footer,
             ]
             .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([4, 10])
-        .style(move |_| pane_style(p.surface_low, p.outline_variant));
+            .align_y(Alignment::Center)
+        } else {
+            row![
+                brand_footer,
+                vault_footer,
+                Space::new().width(Length::Fill),
+                shortcuts_footer,
+                mode_footer,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        };
+
+        let footer = container(footer_row)
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(move |_| pane_style(p.surface_low, p.outline_variant));
 
         root_col = root_col.push(footer);
 
@@ -1097,11 +1278,12 @@ impl FolioApp {
             .into()
     }
 
-    fn view_top_bar(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_top_bar(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         let icon_img = image(self.icon_handle.clone()).width(22).height(22);
-        let brand_title = text("FOLIO")
+        let brand_title = text(self.tr("FOLIO", "فولیو"))
             .size(14)
             .color(p.primary)
+            .font(ui_font)
             .shaping(text::Shaping::Advanced);
         let version_badge = container(
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
@@ -1121,97 +1303,157 @@ impl FolioApp {
                 .align_y(Alignment::Center)
         };
 
-        let rtl_toggle = row![
-            self.rtl_pill(p, RtlMode::Ltr),
-            self.rtl_pill(p, RtlMode::Auto),
-            self.rtl_pill(p, RtlMode::Rtl),
+        let mut rtl_toggle = row![
+            self.rtl_pill(p, ui_font, RtlMode::Ltr),
+            self.rtl_pill(p, ui_font, RtlMode::Auto),
+            self.rtl_pill(p, ui_font, RtlMode::Rtl),
         ]
         .spacing(2)
         .align_y(Alignment::Center);
 
+        if ui_rtl && (self.has_vazirmatn && self.has_dastkhat) {
+            rtl_toggle = rtl_toggle.push(pill_button(
+                self.persian_font_label(),
+                false,
+                p,
+                ui_font,
+                Message::TogglePersianFont,
+            ));
+        }
+
         let theme_btn = pill_button(
-            if self.is_dark { "Light" } else { "Dark" },
+            if self.is_dark {
+                self.tr("Light", "روشن")
+            } else {
+                self.tr("Dark", "تیره")
+            },
             false,
             p,
+            ui_font,
             Message::ToggleTheme,
         );
 
-        let day_nav = row![
-            pill_button("‹", false, p, Message::NavDay(-1)),
-            pill_button("Today", false, p, Message::NavDay(0)),
-            pill_button("›", false, p, Message::NavDay(1)),
-        ]
-        .spacing(3);
+        let day_nav = if ui_rtl {
+            row![
+                pill_button("‹", false, p, ui_font, Message::NavDay(1)),
+                pill_button("امروز", false, p, ui_font, Message::NavDay(0)),
+                pill_button("›", false, p, ui_font, Message::NavDay(-1)),
+            ]
+            .spacing(3)
+        } else {
+            row![
+                pill_button("‹", false, p, ui_font, Message::NavDay(-1)),
+                pill_button("Today", false, p, ui_font, Message::NavDay(0)),
+                pill_button("›", false, p, ui_font, Message::NavDay(1)),
+            ]
+            .spacing(3)
+        };
 
         let page_num = self.doc.page.unwrap_or(self.config.notebook_page);
         let page_ctrl = row![
-            pill_button("-", false, p, Message::AdjustPage(-1)),
-            container(text(format!("p.{page_num}")).size(11).color(p.tertiary))
-                .padding([3, 6])
-                .style(move |_| badge_style(p)),
-            pill_button("+", false, p, Message::AdjustPage(1)),
+            pill_button("-", false, p, ui_font, Message::AdjustPage(-1)),
+            container(
+                text(if ui_rtl {
+                    format!("ص.{page_num}")
+                } else {
+                    format!("p.{page_num}")
+                })
+                .size(11)
+                .color(p.tertiary)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced)
+            )
+            .padding([3, 6])
+            .style(move |_| badge_style(p)),
+            pill_button("+", false, p, ui_font, Message::AdjustPage(1)),
         ]
         .spacing(2)
         .align_y(Alignment::Center);
 
         let triage_label = if self.open_triage.is_empty() {
-            "Triage".to_string()
+            self.tr("Triage", "بررسی").to_string()
         } else {
-            format!("Triage ({})", self.open_triage.len())
+            format!("{} ({})", self.tr("Triage", "بررسی"), self.open_triage.len())
         };
 
         let bujo_nav = row![
             pill_button(
-                "Index",
+                self.tr("Index", "فهرست"),
                 self.doc.rel_path.eq_ignore_ascii_case("Index.md"),
                 p,
+                ui_font,
                 Message::OpenMasterIndex,
             ),
             pill_button(
-                "Monthly",
+                self.tr("Monthly", "ماهانه"),
                 self.doc.rel_path.ends_with("-monthly.md"),
                 p,
+                ui_font,
                 Message::OpenMonthlyLog,
             ),
             pill_button(
                 &triage_label,
                 self.active_panel == ActivePanel::MigrationTriage,
                 p,
+                ui_font,
                 Message::TogglePanel(ActivePanel::MigrationTriage),
             ),
             pill_button(
-                "Reflect",
+                self.tr("Reflect", "بازتاب"),
                 self.active_panel == ActivePanel::Reflect,
                 p,
+                ui_font,
                 Message::TogglePanel(ActivePanel::Reflect),
             ),
-            pill_button("Weekly", false, p, Message::GenerateReview(true)),
-            pill_button("M.Rev", false, p, Message::GenerateReview(false)),
             pill_button(
-                "I/O",
+                self.tr("Weekly", "هفتگی"),
+                false,
+                p,
+                ui_font,
+                Message::GenerateReview(true),
+            ),
+            pill_button(
+                self.tr("M.Rev", "مرور ماه"),
+                false,
+                p,
+                ui_font,
+                Message::GenerateReview(false),
+            ),
+            pill_button(
+                self.tr("I/O", "ورود/خروج"),
                 self.active_panel == ActivePanel::ImportExport,
                 p,
+                ui_font,
                 Message::TogglePanel(ActivePanel::ImportExport),
             ),
         ]
         .spacing(3);
 
-        let search_input = text_input("Search vault or #tag...", &self.search_query)
-            .id(SEARCH_ID)
-            .on_input(Message::SearchChanged)
-            .size(11)
-            .padding([4, 8])
-            .width(Length::Fixed(165.0))
-            .style(move |_, status| input_style(p, status));
+        let search_input = text_input(
+            self.tr("Search vault or #tag...", "جستجو یا #تگ..."),
+            &self.search_query,
+        )
+        .id(SEARCH_ID)
+        .on_input(Message::SearchChanged)
+        .size(11)
+        .font(ui_font)
+        .padding([4, 8])
+        .width(Length::Fixed(165.0))
+        .align_x(if ui_rtl {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
+        .style(move |_, status| input_style(p, status));
 
         let controls = if ui_rtl {
             row![
                 search_input,
+                theme_btn,
+                rtl_toggle,
                 bujo_nav,
                 page_ctrl,
                 day_nav,
-                theme_btn,
-                rtl_toggle,
             ]
             .spacing(6)
             .align_y(Alignment::Center)
@@ -1245,42 +1487,88 @@ impl FolioApp {
             .into()
     }
 
-    fn rtl_pill(&self, p: Palette, mode: RtlMode) -> Element<'_, Message> {
+    fn rtl_pill(&self, p: Palette, ui_font: Font, mode: RtlMode) -> Element<'_, Message> {
         let active = self.rtl_mode == mode;
-        pill_button(mode.label(), active, p, Message::SetRtlMode(mode))
+        let label = match mode {
+            RtlMode::Ltr => "LTR",
+            RtlMode::Auto => "AUTO",
+            RtlMode::Rtl => "فارسی",
+        };
+        let pill_font = if mode == RtlMode::Rtl {
+            self.persian_text_font()
+        } else {
+            ui_font
+        };
+        pill_button(label, active, p, pill_font, Message::SetRtlMode(mode))
     }
 
-    fn view_triage_panel(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_triage_panel(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         let mut col = Column::new().spacing(6);
-        let head = row![
-            text(format!(
+        let title = text(if ui_rtl {
+            format!(
+                "بررسی و انتقال کارها — {} کار باز از روزها و ماه‌های گذشته",
+                self.open_triage.len()
+            )
+        } else {
+            format!(
                 "Batch Migration Triage — {} open actions from past Daily & Monthly logs",
                 self.open_triage.len()
-            ))
-            .size(12)
-            .color(p.tertiary),
-            Space::new().width(Length::Fill),
-            pill_button("Close", false, p, Message::ClosePanels),
-        ]
-        .align_y(Alignment::Center);
+            )
+        })
+        .size(12)
+        .color(p.tertiary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClosePanels,
+        );
+        let head = if ui_rtl {
+            row![close_btn, Space::new().width(Length::Fill), title].align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), close_btn].align_y(Alignment::Center)
+        };
         col = col.push(head);
 
         if self.open_triage.is_empty() {
             col = col.push(
-                text("All caught up! No open (.) actions left in past Daily Notes or Monthly Logs.")
-                    .size(12)
-                    .color(p.on_surface_variant),
+                text(self.tr(
+                    "All caught up! No open (.) actions left in past Daily Notes or Monthly Logs.",
+                    "همه کارها بررسی شدند! هیچ کار بازی در یادداشت‌های قبلی باقی نمانده است.",
+                ))
+                .size(12)
+                .color(p.on_surface_variant)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced)
+                .width(Length::Fill)
+                .align_x(if ui_rtl {
+                    Horizontal::Right
+                } else {
+                    Horizontal::Left
+                }),
             );
         } else {
             let mut list = Column::new().spacing(4);
             for item in &self.open_triage {
                 let is_rtl = self.is_text_rtl(&item.entry.text);
+                let text_font = if is_rtl {
+                    self.persian_text_font()
+                } else {
+                    ui_font
+                };
                 let src = text(format!("[{}]", item.doc_title))
                     .size(11)
-                    .color(p.on_surface_variant);
+                    .color(p.on_surface_variant)
+                    .font(ui_font)
+                    .shaping(text::Shaping::Advanced);
                 let body = text(item.entry.text.clone())
                     .size(12)
                     .color(p.on_surface)
+                    .font(text_font)
                     .shaping(text::Shaping::Advanced)
                     .width(Length::Fill)
                     .align_x(if is_rtl || ui_rtl {
@@ -1290,9 +1578,10 @@ impl FolioApp {
                     });
                 let btns = row![
                     mini_btn(
-                        "> Today",
+                        self.tr("> Today", "> امروز"),
                         true,
                         p,
+                        ui_font,
                         Message::TriageAction {
                             source_rel: item.rel_path.clone(),
                             entry_id: item.entry.id,
@@ -1300,9 +1589,10 @@ impl FolioApp {
                         },
                     ),
                     mini_btn(
-                        "< Future",
+                        self.tr("< Future", "< آینده"),
                         false,
                         p,
+                        ui_font,
                         Message::TriageAction {
                             source_rel: item.rel_path.clone(),
                             entry_id: item.entry.id,
@@ -1310,9 +1600,10 @@ impl FolioApp {
                         },
                     ),
                     mini_btn(
-                        "× Done",
+                        self.tr("× Done", "× انجام"),
                         false,
                         p,
+                        ui_font,
                         Message::TriageAction {
                             source_rel: item.rel_path.clone(),
                             entry_id: item.entry.id,
@@ -1320,9 +1611,10 @@ impl FolioApp {
                         },
                     ),
                     mini_btn(
-                        "~ Cancel",
+                        self.tr("~ Cancel", "~ لغو"),
                         false,
                         p,
+                        ui_font,
                         Message::TriageAction {
                             source_rel: item.rel_path.clone(),
                             entry_id: item.entry.id,
@@ -1332,15 +1624,17 @@ impl FolioApp {
                 ]
                 .spacing(4);
 
+                let item_row = if ui_rtl {
+                    row![btns, body, src].spacing(8).align_y(Alignment::Center)
+                } else {
+                    row![src, body, btns].spacing(8).align_y(Alignment::Center)
+                };
+
                 list = list.push(
-                    container(
-                        row![src, body, btns]
-                            .spacing(8)
-                            .align_y(Alignment::Center),
-                    )
-                    .width(Length::Fill)
-                    .padding([5, 8])
-                    .style(move |_| pane_style(p.surface_container, p.outline_variant)),
+                    container(item_row)
+                        .width(Length::Fill)
+                        .padding([5, 8])
+                        .style(move |_| pane_style(p.surface_container, p.outline_variant)),
                 );
             }
             col = col.push(scrollable(list).height(Length::Fixed(185.0)));
@@ -1353,39 +1647,94 @@ impl FolioApp {
             .into()
     }
 
-    fn view_global_paper_panel(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_global_paper_panel(
+        &self,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
         let mut col = Column::new().spacing(6);
-        let head = row![
-            text(format!(
+        let title = text(if ui_rtl {
+            format!(
+                "صف انتقال به دفتر کاغذی — {} مورد در کل بایگانی در انتظار انتقال",
+                self.global_paper.len()
+            )
+        } else {
+            format!(
                 "Global Carry-to-Paper Queue — {} entries across vault waiting for notebook",
                 self.global_paper.len()
-            ))
-            .size(12)
-            .color(p.secondary),
-            Space::new().width(Length::Fill),
-            pill_button("Mark Entire Vault Synced", true, p, Message::GlobalPaperSyncAll),
-            pill_button("Close", false, p, Message::ClosePanels),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+            )
+        })
+        .size(12)
+        .color(p.secondary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let sync_all_btn = pill_button(
+            self.tr("Mark Entire Vault Synced", "ثبت انتقال کل بایگانی"),
+            true,
+            p,
+            ui_font,
+            Message::GlobalPaperSyncAll,
+        );
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClosePanels,
+        );
+
+        let head = if ui_rtl {
+            row![close_btn, sync_all_btn, Space::new().width(Length::Fill), title]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), sync_all_btn, close_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
         col = col.push(head);
 
         if self.global_paper.is_empty() {
             col = col.push(
-                text("Every entry in your vault is synced to paper ([paper:ok])!")
-                    .size(12)
-                    .color(p.tertiary),
+                text(self.tr(
+                    "Every entry in your vault is synced to paper ([paper:ok])!",
+                    "همه یادداشت‌های بایگانی به دفتر کاغذی منتقل شده‌اند!",
+                ))
+                .size(12)
+                .color(p.tertiary)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced)
+                .width(Length::Fill)
+                .align_x(if ui_rtl {
+                    Horizontal::Right
+                } else {
+                    Horizontal::Left
+                }),
             );
         } else {
             let mut list = Column::new().spacing(4);
             for item in &self.global_paper {
                 let is_rtl = self.is_text_rtl(&item.entry.text);
-                let src = text(format!("[{}] {}", item.doc_title, item.entry.signifier.symbol()))
-                    .size(11)
-                    .color(p.on_surface_variant);
+                let text_font = if is_rtl {
+                    self.persian_text_font()
+                } else {
+                    ui_font
+                };
+                let src = text(format!(
+                    "[{}] {}",
+                    item.doc_title,
+                    item.entry.signifier.symbol()
+                ))
+                .size(11)
+                .color(p.on_surface_variant)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced);
                 let body = text(item.entry.text.clone())
                     .size(12)
                     .color(p.on_surface)
+                    .font(text_font)
                     .shaping(text::Shaping::Advanced)
                     .width(Length::Fill)
                     .align_x(if is_rtl || ui_rtl {
@@ -1394,16 +1743,22 @@ impl FolioApp {
                         Horizontal::Left
                     });
                 let ok_btn = mini_btn(
-                    "✓ Copied",
+                    self.tr("✓ Copied", "✓ منتقل شد"),
                     true,
                     p,
+                    ui_font,
                     Message::GlobalPaperSyncOne {
                         rel_path: item.rel_path.clone(),
                         entry_id: item.entry.id,
                     },
                 );
+                let item_row = if ui_rtl {
+                    row![ok_btn, body, src].spacing(8).align_y(Alignment::Center)
+                } else {
+                    row![src, body, ok_btn].spacing(8).align_y(Alignment::Center)
+                };
                 list = list.push(
-                    container(row![src, body, ok_btn].spacing(8).align_y(Alignment::Center))
+                    container(item_row)
                         .width(Length::Fill)
                         .padding([5, 8])
                         .style(move |_| pane_style(p.surface_container, p.outline_variant)),
@@ -1419,74 +1774,161 @@ impl FolioApp {
             .into()
     }
 
-    fn view_reflect_panel(&self, p: Palette, _ui_rtl: bool) -> Element<'_, Message> {
-        let head = row![
-            text("AM / PM Reflection (BuJo Daily Ritual)")
-                .size(12)
-                .color(p.primary),
-            Space::new().width(Length::Fill),
-            pill_button("Close", false, p, Message::ClosePanels),
-        ]
-        .align_y(Alignment::Center);
+    fn view_reflect_panel(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
+        let title = text(self.tr(
+            "AM / PM Reflection (BuJo Daily Ritual)",
+            "بازتاب صبح و شب (آیین روزانه بولت‌ژورنال)",
+        ))
+        .size(12)
+        .color(p.primary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClosePanels,
+        );
+        let head = if ui_rtl {
+            row![close_btn, Space::new().width(Length::Fill), title].align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), close_btn].align_y(Alignment::Center)
+        };
 
+        let am_label = text(self.tr("AM Focus", "تمرکز صبح"))
+            .size(11)
+            .color(p.tertiary)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced)
+            .width(Length::Fixed(72.0))
+            .align_x(if ui_rtl {
+                Horizontal::Right
+            } else {
+                Horizontal::Left
+            });
         let am_in = text_input(
-            "AM: What matters most today? (logs as priority `*. ` action in Today)",
+            self.tr(
+                "AM: What matters most today? (logs as priority `*. ` action in Today)",
+                "صبح: مهم‌ترین کار امروز چیست؟ (با نشانه اولویت *. در امروز ثبت می‌شود)",
+            ),
             &self.am_focus_input,
         )
         .on_input(Message::AmFocusChanged)
         .on_submit(Message::SubmitAmFocus)
         .size(12)
+        .font(ui_font)
         .padding([5, 8])
+        .align_x(if ui_rtl || self.is_text_rtl(&self.am_focus_input) {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
         .style(move |_, status| input_style(p, status));
-        let am_row = row![
-            text("AM Focus").size(11).color(p.tertiary).width(Length::Fixed(72.0)),
-            am_in,
-            pill_button("+ Priority", true, p, Message::SubmitAmFocus),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let am_btn = pill_button(
+            self.tr("+ Priority", "+ اولویت"),
+            true,
+            p,
+            ui_font,
+            Message::SubmitAmFocus,
+        );
+        let am_row = if ui_rtl {
+            row![am_btn, am_in, am_label]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![am_label, am_in, am_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
 
+        let pm_label = text(self.tr("PM Reflect", "بازتاب شب"))
+            .size(11)
+            .color(p.secondary)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced)
+            .width(Length::Fixed(72.0))
+            .align_x(if ui_rtl {
+                Horizontal::Right
+            } else {
+                Horizontal::Left
+            });
         let pm_in = text_input(
-            "PM: How did today feel or what stood out? (logs as `= ` emotion in Today)",
+            self.tr(
+                "PM: How did today feel or what stood out? (logs as `= ` emotion in Today)",
+                "شب: امروز چه حسی داشتی یا چه اتفاقی برجسته بود؟ (با نشانه = ثبت می‌شود)",
+            ),
             &self.pm_emotion_input,
         )
         .on_input(Message::PmEmotionChanged)
         .on_submit(Message::SubmitPmEmotion)
         .size(12)
+        .font(ui_font)
         .padding([5, 8])
+        .align_x(if ui_rtl || self.is_text_rtl(&self.pm_emotion_input) {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
         .style(move |_, status| input_style(p, status));
-        let pm_row = row![
-            text("PM Reflect").size(11).color(p.secondary).width(Length::Fixed(72.0)),
-            pm_in,
-            pill_button("+ Emotion", true, p, Message::SubmitPmEmotion),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let pm_btn = pill_button(
+            self.tr("+ Emotion", "+ احساس"),
+            true,
+            p,
+            ui_font,
+            Message::SubmitPmEmotion,
+        );
+        let pm_row = if ui_rtl {
+            row![pm_btn, pm_in, pm_label]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![pm_label, pm_in, pm_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
 
-        let checklist = row![
-            text(format!(
+        let check_txt = text(if ui_rtl {
+            format!(
+                "چک‌لیست شبانه: {} کار باز برای بررسی · {} مورد در انتظار انتقال به دفتر",
+                self.open_triage.len(),
+                self.global_paper.len()
+            )
+        } else {
+            format!(
                 "Evening checklist: {} open tasks to triage · {} entries pending Carry to Paper",
                 self.open_triage.len(),
                 self.global_paper.len()
-            ))
-            .size(11)
-            .color(p.on_surface_variant),
-            Space::new().width(Length::Fill),
-            pill_button(
-                "Open Triage",
-                false,
-                p,
-                Message::TogglePanel(ActivePanel::MigrationTriage),
-            ),
-            pill_button(
-                "Paper Queue",
-                false,
-                p,
-                Message::TogglePanel(ActivePanel::GlobalPaperQueue),
-            ),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+            )
+        })
+        .size(11)
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let triage_btn = pill_button(
+            self.tr("Open Triage", "باز کردن بررسی"),
+            false,
+            p,
+            ui_font,
+            Message::TogglePanel(ActivePanel::MigrationTriage),
+        );
+        let paper_btn = pill_button(
+            self.tr("Paper Queue", "صف دفتر کاغذی"),
+            false,
+            p,
+            ui_font,
+            Message::TogglePanel(ActivePanel::GlobalPaperQueue),
+        );
+        let checklist = if ui_rtl {
+            row![paper_btn, triage_btn, Space::new().width(Length::Fill), check_txt]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![check_txt, Space::new().width(Length::Fill), triage_btn, paper_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
 
         container(column![head, am_row, pm_row, checklist].spacing(6))
             .width(Length::Fill)
@@ -1495,57 +1937,147 @@ impl FolioApp {
             .into()
     }
 
-    fn view_import_export_panel(&self, p: Palette, _ui_rtl: bool) -> Element<'_, Message> {
-        let head = row![
-            text("Import & Export (Obsidian / Markdown / Apple Notes / JSON / CSV)")
-                .size(12)
-                .color(p.primary),
-            Space::new().width(Length::Fill),
-            pill_button("Close", false, p, Message::ClosePanels),
-        ]
-        .align_y(Alignment::Center);
+    fn view_import_export_panel(
+        &self,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
+        let title = text(self.tr(
+            "Import & Export (Obsidian / Markdown / Apple Notes / JSON / CSV)",
+            "ورود و خروج یادداشت‌ها (Obsidian / Markdown / JSON / CSV)",
+        ))
+        .size(12)
+        .color(p.primary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClosePanels,
+        );
+        let head = if ui_rtl {
+            row![close_btn, Space::new().width(Length::Fill), title].align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), close_btn].align_y(Alignment::Center)
+        };
 
         let fmt_row = row![
-            text("Format:").size(11).color(p.on_surface_variant),
-            pill_button("Auto", self.import_format == ImportFormat::Auto, p, Message::SetImportFormat(ImportFormat::Auto)),
-            pill_button("Markdown", self.import_format == ImportFormat::Markdown, p, Message::SetImportFormat(ImportFormat::Markdown)),
-            pill_button("JSON", self.import_format == ImportFormat::Json, p, Message::SetImportFormat(ImportFormat::Json)),
-            pill_button("CSV", self.import_format == ImportFormat::Csv, p, Message::SetImportFormat(ImportFormat::Csv)),
-            pill_button("Text", self.import_format == ImportFormat::Text, p, Message::SetImportFormat(ImportFormat::Text)),
+            text(self.tr("Format:", "قالب:"))
+                .size(11)
+                .color(p.on_surface_variant)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced),
+            pill_button(
+                self.tr("Auto", "خودکار"),
+                self.import_format == ImportFormat::Auto,
+                p,
+                ui_font,
+                Message::SetImportFormat(ImportFormat::Auto),
+            ),
+            pill_button(
+                "Markdown",
+                self.import_format == ImportFormat::Markdown,
+                p,
+                ui_font,
+                Message::SetImportFormat(ImportFormat::Markdown),
+            ),
+            pill_button(
+                "JSON",
+                self.import_format == ImportFormat::Json,
+                p,
+                ui_font,
+                Message::SetImportFormat(ImportFormat::Json),
+            ),
+            pill_button(
+                "CSV",
+                self.import_format == ImportFormat::Csv,
+                p,
+                ui_font,
+                Message::SetImportFormat(ImportFormat::Csv),
+            ),
+            pill_button(
+                self.tr("Text", "متن"),
+                self.import_format == ImportFormat::Text,
+                p,
+                ui_font,
+                Message::SetImportFormat(ImportFormat::Text),
+            ),
             Space::new().width(Length::Fill),
-            text("Export current doc:").size(11).color(p.on_surface_variant),
-            pill_button("Export .md", false, p, Message::RunExport(ExportFormat::Markdown)),
-            pill_button("Export .json", false, p, Message::RunExport(ExportFormat::Json)),
-            pill_button("Export .csv", false, p, Message::RunExport(ExportFormat::Csv)),
+            text(self.tr("Export:", "خروجی:"))
+                .size(11)
+                .color(p.on_surface_variant)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced),
+            pill_button(".md", false, p, ui_font, Message::RunExport(ExportFormat::Markdown)),
+            pill_button(".json", false, p, ui_font, Message::RunExport(ExportFormat::Json)),
+            pill_button(".csv", false, p, ui_font, Message::RunExport(ExportFormat::Csv)),
         ]
         .spacing(4)
         .align_y(Alignment::Center);
 
-        let file_in = text_input("Import from file path (e.g. ~/Desktop/notes.md)...", &self.import_path_input)
-            .on_input(Message::ImportPathChanged)
-            .on_submit(Message::RunImportFile)
-            .size(12)
-            .padding([5, 8])
-            .style(move |_, status| input_style(p, status));
-        let file_row = row![
-            file_in,
-            pill_button("Import File", true, p, Message::RunImportFile),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let file_in = text_input(
+            self.tr(
+                "Import from file path (e.g. ~/Desktop/notes.md)...",
+                "مسیر فایل برای ورود (مثلاً ~/Desktop/notes.md)...",
+            ),
+            &self.import_path_input,
+        )
+        .on_input(Message::ImportPathChanged)
+        .on_submit(Message::RunImportFile)
+        .size(12)
+        .font(ui_font)
+        .padding([5, 8])
+        .style(move |_, status| input_style(p, status));
+        let file_btn = pill_button(
+            self.tr("Import File", "ورود از فایل"),
+            true,
+            p,
+            ui_font,
+            Message::RunImportFile,
+        );
+        let file_row = if ui_rtl {
+            row![file_btn, file_in].spacing(6).align_y(Alignment::Center)
+        } else {
+            row![file_in, file_btn].spacing(6).align_y(Alignment::Center)
+        };
 
-        let paste_in = text_input("Or paste Markdown / checklists / JSON / CSV lines here...", &self.import_paste_input)
-            .on_input(Message::ImportPasteChanged)
-            .on_submit(Message::RunImportPaste)
-            .size(12)
-            .padding([5, 8])
-            .style(move |_, status| input_style(p, status));
-        let paste_row = row![
-            paste_in,
-            pill_button("Import Pasted", true, p, Message::RunImportPaste),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let paste_in = text_input(
+            self.tr(
+                "Or paste Markdown / checklists / JSON / CSV lines here...",
+                "یا خطوط Markdown / چک‌لیست / JSON / CSV را اینجا جای‌گذاری کنید...",
+            ),
+            &self.import_paste_input,
+        )
+        .on_input(Message::ImportPasteChanged)
+        .on_submit(Message::RunImportPaste)
+        .size(12)
+        .font(ui_font)
+        .padding([5, 8])
+        .align_x(if ui_rtl {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
+        .style(move |_, status| input_style(p, status));
+        let paste_btn = pill_button(
+            self.tr("Import Pasted", "ورود متن"),
+            true,
+            p,
+            ui_font,
+            Message::RunImportPaste,
+        );
+        let paste_row = if ui_rtl {
+            row![paste_btn, paste_in]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![paste_in, paste_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
 
         container(column![head, fmt_row, file_row, paste_row].spacing(6))
             .width(Length::Fill)
@@ -1554,24 +2086,43 @@ impl FolioApp {
             .into()
     }
 
-    fn view_search_results(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_search_results(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         let mut col = Column::new().spacing(4);
-        let header = row![
-            text(format!("Search results ({})", self.search_hits.len()))
-                .size(12)
-                .color(p.primary),
-            Space::new().width(Length::Fill),
-            pill_button("Close", false, p, Message::ClearSearch),
-        ]
-        .align_y(Alignment::Center);
+        let title = text(if ui_rtl {
+            format!("نتایج جستجو ({})", self.search_hits.len())
+        } else {
+            format!("Search results ({})", self.search_hits.len())
+        })
+        .size(12)
+        .color(p.primary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClearSearch,
+        );
+        let header = if ui_rtl {
+            row![close_btn, Space::new().width(Length::Fill), title].align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), close_btn].align_y(Alignment::Center)
+        };
         col = col.push(header);
 
         for hit in &self.search_hits {
             let hit_rtl = self.is_text_rtl(&hit.snippet);
+            let hit_font = if hit_rtl {
+                self.persian_text_font()
+            } else {
+                ui_font
+            };
             let label = format!("{} — {}", hit.doc_title, hit.snippet);
             let btn_content = text(label)
                 .size(12)
                 .color(p.on_surface)
+                .font(hit_font)
                 .shaping(text::Shaping::Advanced)
                 .width(Length::Fill)
                 .align_x(if hit_rtl || ui_rtl {
@@ -1596,24 +2147,44 @@ impl FolioApp {
             .into()
     }
 
-    fn view_nav_pane(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_nav_pane(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         // [1] SPACES (with Manage Spaces: Rename + Delete)
         let mut spaces_col = Column::new().spacing(4);
-        spaces_col = spaces_col.push(section_header("[1] SPACES", p.primary, ui_rtl));
+        spaces_col = spaces_col.push(section_header(
+            self.tr("[1] SPACES", "[۱] فضاها"),
+            p.primary,
+            ui_rtl,
+            ui_font,
+        ));
 
         for sp in &self.spaces {
             if self.renaming_space_rel.as_deref() == Some(sp.rel_path.as_str()) {
-                let ren_in = text_input("Rename space...", &self.renaming_space_text)
-                    .on_input(Message::RenameSpaceChanged)
-                    .on_submit(Message::SaveRenameSpace)
-                    .size(11)
-                    .padding([3, 6])
-                    .style(move |_, status| input_style(p, status));
+                let ren_in = text_input(
+                    self.tr("Rename space...", "نام جدید فضا..."),
+                    &self.renaming_space_text,
+                )
+                .on_input(Message::RenameSpaceChanged)
+                .on_submit(Message::SaveRenameSpace)
+                .size(11)
+                .font(ui_font)
+                .padding([3, 6])
+                .align_x(if ui_rtl {
+                    Horizontal::Right
+                } else {
+                    Horizontal::Left
+                })
+                .style(move |_, status| input_style(p, status));
                 spaces_col = spaces_col.push(
                     row![
                         ren_in,
-                        mini_btn("OK", true, p, Message::SaveRenameSpace),
-                        mini_btn("×", false, p, Message::CancelRenameSpace),
+                        mini_btn(
+                            self.tr("OK", "ثبت"),
+                            true,
+                            p,
+                            ui_font,
+                            Message::SaveRenameSpace
+                        ),
+                        mini_btn("×", false, p, ui_font, Message::CancelRenameSpace),
                     ]
                     .spacing(3)
                     .align_y(Alignment::Center),
@@ -1629,12 +2200,23 @@ impl FolioApp {
                 } else {
                     p.on_surface_variant
                 });
-            let name_txt = text(sp.name.clone())
+            let sp_display_name = if ui_rtl && sp.is_daily {
+                "یادداشت امروز".to_string()
+            } else {
+                sp.name.clone()
+            };
+            let name_font = if self.is_text_rtl(&sp_display_name) {
+                self.persian_text_font()
+            } else {
+                ui_font
+            };
+            let name_txt = text(sp_display_name)
                 .size(12)
                 .color(if active { p.primary } else { p.on_surface })
+                .font(name_font)
                 .shaping(text::Shaping::Advanced);
 
-            let item_row = if ui_rtl || self.is_text_rtl(&sp.name) {
+            let item_row = if ui_rtl {
                 row![count_txt, Space::new().width(Length::Fill), name_txt]
                     .align_y(Alignment::Center)
             } else {
@@ -1651,36 +2233,52 @@ impl FolioApp {
             if sp.is_daily {
                 spaces_col = spaces_col.push(open_btn);
             } else {
-                spaces_col = spaces_col.push(
-                    row![
-                        open_btn,
-                        mini_btn(
-                            "✎",
-                            false,
-                            p,
-                            Message::StartRenameSpace(sp.rel_path.clone(), sp.name.clone()),
-                        ),
-                        mini_btn("×", false, p, Message::DeleteSpace(sp.rel_path.clone())),
-                    ]
-                    .spacing(2)
-                    .align_y(Alignment::Center),
+                let ren_btn = mini_btn(
+                    "✎",
+                    false,
+                    p,
+                    ui_font,
+                    Message::StartRenameSpace(sp.rel_path.clone(), sp.name.clone()),
                 );
+                let del_btn = mini_btn("×", false, p, ui_font, Message::DeleteSpace(sp.rel_path.clone()));
+                spaces_col = spaces_col.push(if ui_rtl {
+                    row![del_btn, ren_btn, open_btn]
+                        .spacing(2)
+                        .align_y(Alignment::Center)
+                } else {
+                    row![open_btn, ren_btn, del_btn]
+                        .spacing(2)
+                        .align_y(Alignment::Center)
+                });
             }
         }
 
         // New Space creator
-        let new_space_in = text_input("New space...", &self.new_space_name)
-            .on_input(Message::NewSpaceChanged)
-            .on_submit(Message::CreateSpace)
-            .size(11)
-            .padding([4, 6])
-            .style(move |_, status| input_style(p, status));
-        let add_space_btn = pill_button("+", false, p, Message::CreateSpace);
-        spaces_col = spaces_col.push(
+        let new_space_in = text_input(
+            self.tr("New space...", "فضای جدید..."),
+            &self.new_space_name,
+        )
+        .on_input(Message::NewSpaceChanged)
+        .on_submit(Message::CreateSpace)
+        .size(11)
+        .font(ui_font)
+        .padding([4, 6])
+        .align_x(if ui_rtl {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
+        .style(move |_, status| input_style(p, status));
+        let add_space_btn = pill_button("+", false, p, ui_font, Message::CreateSpace);
+        spaces_col = spaces_col.push(if ui_rtl {
+            row![add_space_btn, new_space_in]
+                .spacing(4)
+                .align_y(Alignment::Center)
+        } else {
             row![new_space_in, add_space_btn]
                 .spacing(4)
-                .align_y(Alignment::Center),
-        );
+                .align_y(Alignment::Center)
+        });
 
         let spaces_card = container(spaces_col)
             .width(Length::Fill)
@@ -1689,22 +2287,32 @@ impl FolioApp {
 
         // [2] VAULT TREE
         let mut vault_col = Column::new().spacing(2);
-        vault_col = vault_col.push(section_header("[2] VAULT", p.primary, ui_rtl));
+        vault_col = vault_col.push(section_header(
+            self.tr("[2] VAULT", "[۲] بایگانی"),
+            p.primary,
+            ui_rtl,
+            ui_font,
+        ));
 
         for node in &self.vault_tree.nodes {
             if node.is_dir {
                 vault_col = vault_col.push(
                     container(
-                        text(format!("▸ {}", node.label))
-                            .size(11)
-                            .color(p.on_surface_variant)
-                            .shaping(text::Shaping::Advanced)
-                            .width(Length::Fill)
-                            .align_x(if ui_rtl {
-                                Horizontal::Right
-                            } else {
-                                Horizontal::Left
-                            }),
+                        text(if ui_rtl {
+                            format!("{} ◂", node.label)
+                        } else {
+                            format!("▸ {}", node.label)
+                        })
+                        .size(11)
+                        .color(p.on_surface_variant)
+                        .font(ui_font)
+                        .shaping(text::Shaping::Advanced)
+                        .width(Length::Fill)
+                        .align_x(if ui_rtl {
+                            Horizontal::Right
+                        } else {
+                            Horizontal::Left
+                        }),
                     )
                     .padding(Padding {
                         top: 6.0,
@@ -1731,12 +2339,18 @@ impl FolioApp {
                         left: 6.0 + indent,
                     }
                 };
+                let label_font = if self.is_text_rtl(&node.label) {
+                    self.persian_text_font()
+                } else {
+                    ui_font
+                };
 
                 vault_col = vault_col.push(
                     button(
                         text(node.label.clone())
                             .size(11)
                             .color(if active { p.primary } else { p.on_surface })
+                            .font(label_font)
                             .shaping(text::Shaping::Advanced)
                             .width(Length::Fill)
                             .align_x(if ui_rtl {
@@ -1766,37 +2380,71 @@ impl FolioApp {
             .into()
     }
 
-    fn view_rapid_log_pane(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
-        let doc_rtl = ui_rtl || self.is_text_rtl(&self.doc.title);
+    fn view_rapid_log_pane(
+        &self,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
+        let title_font = if self.is_text_rtl(&self.doc.title) {
+            self.persian_text_font()
+        } else {
+            ui_font
+        };
         let title_txt = text(self.doc.title.clone())
             .size(18)
             .color(p.primary)
+            .font(title_font)
             .shaping(text::Shaping::Advanced);
 
         let pending = self.doc.paper_pending_count();
         let pages_str = self.doc.format_pages();
-        let meta_txt = text(format!(
-            "{} · {} entries · {} pending paper",
-            pages_str,
-            self.doc.entries.len(),
-            pending
-        ))
+        let meta_txt = text(if ui_rtl {
+            format!(
+                "{} · {} مورد · {} در انتظار دفتر",
+                pages_str,
+                self.doc.entries.len(),
+                pending
+            )
+        } else {
+            format!(
+                "{} · {} entries · {} pending paper",
+                pages_str,
+                self.doc.entries.len(),
+                pending
+            )
+        })
         .size(11)
-        .color(p.on_surface_variant);
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
 
-        let thread_in = text_input("p.#", &self.thread_page_input)
+        let thread_in = text_input(self.tr("p.#", "ص.#"), &self.thread_page_input)
             .on_input(Message::ThreadPageChanged)
             .on_submit(Message::AddThreadedPage)
             .size(11)
+            .font(ui_font)
             .padding([3, 6])
             .width(Length::Fixed(52.0))
             .style(move |_, status| input_style(p, status));
-        let thread_btn = pill_button("+ Thread", false, p, Message::AddThreadedPage);
-        let thread_ctrl = row![thread_in, thread_btn]
-            .spacing(4)
-            .align_y(Alignment::Center);
+        let thread_btn = pill_button(
+            self.tr("+ Thread", "+ پیوند"),
+            false,
+            p,
+            ui_font,
+            Message::AddThreadedPage,
+        );
+        let thread_ctrl = if ui_rtl {
+            row![thread_btn, thread_in]
+                .spacing(4)
+                .align_y(Alignment::Center)
+        } else {
+            row![thread_in, thread_btn]
+                .spacing(4)
+                .align_y(Alignment::Center)
+        };
 
-        let doc_header = if doc_rtl {
+        let doc_header = if ui_rtl {
             row![
                 thread_ctrl,
                 meta_txt,
@@ -1818,34 +2466,58 @@ impl FolioApp {
 
         // Filter bar (Signifiers + Inline #tags)
         let mut filter_row = Row::new().spacing(4).align_y(Alignment::Center);
-        for f in [
-            EntryFilter::All,
-            EntryFilter::Action,
-            EntryFilter::Event,
-            EntryFilter::Emotion,
-            EntryFilter::Note,
-        ] {
+        if ui_rtl {
+            filter_row = filter_row.push(Space::new().width(Length::Fill));
+        }
+        let filters = if ui_rtl {
+            [
+                EntryFilter::Note,
+                EntryFilter::Emotion,
+                EntryFilter::Event,
+                EntryFilter::Action,
+                EntryFilter::All,
+            ]
+        } else {
+            [
+                EntryFilter::All,
+                EntryFilter::Action,
+                EntryFilter::Event,
+                EntryFilter::Emotion,
+                EntryFilter::Note,
+            ]
+        };
+        for f in filters {
             filter_row = filter_row.push(pill_button(
-                f.label(),
+                self.filter_label(f),
                 self.filter == f,
                 p,
+                ui_font,
                 Message::SetFilter(f),
             ));
         }
 
         let mut tags_row = Row::new().spacing(4).align_y(Alignment::Center);
+        if ui_rtl {
+            tags_row = tags_row.push(Space::new().width(Length::Fill));
+        }
         for tag in &self.inline_tags {
             let active = self.tag_filter.as_deref() == Some(tag.as_str());
+            let tag_font = if self.is_text_rtl(tag) {
+                self.persian_text_font()
+            } else {
+                ui_font
+            };
             tags_row = tags_row.push(pill_button(
                 tag,
                 active,
                 p,
+                tag_font,
                 Message::ToggleTagFilter(tag.clone()),
             ));
         }
 
         // Composer
-        let composer = self.view_composer(p, ui_rtl);
+        let composer = self.view_composer(p, ui_rtl, ui_font);
 
         // Entries list
         let filtered_entries: Vec<&Entry> = self
@@ -1869,13 +2541,19 @@ impl FolioApp {
             for line in &self.doc.prose_lines {
                 if !line.trim().is_empty() {
                     let line_rtl = self.is_text_rtl(line);
+                    let line_font = if line_rtl {
+                        self.persian_text_font()
+                    } else {
+                        ui_font
+                    };
                     prose_box = prose_box.push(
                         text(line.clone())
                             .size(12)
                             .color(p.on_surface_variant)
+                            .font(line_font)
                             .shaping(text::Shaping::Advanced)
                             .width(Length::Fill)
-                            .align_x(if line_rtl {
+                            .align_x(if line_rtl || ui_rtl {
                                 Horizontal::Right
                             } else {
                                 Horizontal::Left
@@ -1894,24 +2572,29 @@ impl FolioApp {
         if filtered_entries.is_empty() {
             entries_col = entries_col.push(
                 container(
-                    text("No entries yet. Press ⌘N / Ctrl+N or use the rapid-log bar above to add one.")
-                        .size(12)
-                        .color(p.on_surface_variant)
-                        .shaping(text::Shaping::Advanced)
-                        .width(Length::Fill)
-                        .align_x(if ui_rtl {
-                            Horizontal::Right
-                        } else {
-                            Horizontal::Left
-                        }),
+                    text(self.tr(
+                        "No entries yet. Press ⌘N / Ctrl+N or use the rapid-log bar above to add one.",
+                        "هنوز موردی ثبت نشده. برای ثبت سریع کلید ⌘N / Ctrl+N را بزنید یا در کادر بالا بنویسید.",
+                    ))
+                    .size(12)
+                    .color(p.on_surface_variant)
+                    .font(ui_font)
+                    .shaping(text::Shaping::Advanced)
+                    .width(Length::Fill)
+                    .align_x(if ui_rtl {
+                        Horizontal::Right
+                    } else {
+                        Horizontal::Left
+                    }),
                 )
                 .padding(16),
             );
         } else {
             for entry in filtered_entries {
-                entries_col = entries_col.push(self.view_entry_row(entry, p));
+                entries_col = entries_col.push(self.view_entry_row(entry, p, ui_rtl, ui_font));
                 if self.migrating_entry_id == Some(entry.id) {
-                    entries_col = entries_col.push(self.view_migrate_bar(entry.id, p, ui_rtl));
+                    entries_col =
+                        entries_col.push(self.view_migrate_bar(entry.id, p, ui_rtl, ui_font));
                 }
             }
         }
@@ -1931,59 +2614,70 @@ impl FolioApp {
             .into()
     }
 
-    fn view_composer(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_composer(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         let sig_pills = row![
             pill_button(
                 ".",
                 self.composer_sig == Signifier::Action,
                 p,
+                ui_font,
                 Message::SetComposerSig(Signifier::Action),
             ),
             pill_button(
                 "o",
                 self.composer_sig == Signifier::Event,
                 p,
+                ui_font,
                 Message::SetComposerSig(Signifier::Event),
             ),
             pill_button(
                 "=",
                 self.composer_sig == Signifier::Emotion,
                 p,
+                ui_font,
                 Message::SetComposerSig(Signifier::Emotion),
             ),
             pill_button(
                 "-",
                 self.composer_sig == Signifier::Note,
                 p,
+                ui_font,
                 Message::SetComposerSig(Signifier::Note),
             ),
             pill_button(
                 "*",
                 self.composer_mod == EntryModifier::Priority,
                 p,
+                ui_font,
                 Message::ToggleComposerMod(EntryModifier::Priority),
             ),
             pill_button(
                 "!",
                 self.composer_mod == EntryModifier::Inspiration,
                 p,
+                ui_font,
                 Message::ToggleComposerMod(EntryModifier::Inspiration),
             ),
         ]
         .spacing(3);
 
-        let composer_rtl = self.is_text_rtl(&self.composer_text);
-        let placeholder = if ui_rtl {
-            "ثبت سریع... (یا . برای کار، o برای رویداد، = برای حس، - برای یادداشت)"
+        let composer_rtl = ui_rtl || self.is_text_rtl(&self.composer_text);
+        let composer_font = if composer_rtl {
+            self.persian_text_font()
         } else {
-            "Rapid log (⌘N)... prefix `. `, `o `, `= `, `- `, `*. `, `!- ` or type RTL directly"
+            ui_font
         };
+        let placeholder = self.tr(
+            "Rapid log (⌘N)... prefix `. `, `o `, `= `, `- `, `*. `, `!- `",
+            "ثبت سریع (⌘N)... با پیشوند . برای کار، o برای رویداد، = برای احساس، - برای یادداشت",
+        );
 
         let input = text_input(placeholder, &self.composer_text)
             .id(COMPOSER_ID)
             .on_input(Message::ComposerChanged)
             .on_submit(Message::SubmitEntry)
             .size(13)
+            .font(composer_font)
             .padding([6, 10])
             .align_x(if composer_rtl {
                 Horizontal::Right
@@ -1993,9 +2687,10 @@ impl FolioApp {
             .style(move |_, status| input_style(p, status));
 
         let submit_btn = button(
-            text("+ Log")
+            text(self.tr("+ Log", "+ ثبت"))
                 .size(12)
                 .color(p.on_primary)
+                .font(ui_font)
                 .shaping(text::Shaping::Advanced),
         )
         .padding([6, 12])
@@ -2019,36 +2714,58 @@ impl FolioApp {
             .into()
     }
 
-    fn view_entry_row(&self, entry: &Entry, p: Palette) -> Element<'_, Message> {
+    fn view_entry_row(
+        &self,
+        entry: &Entry,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
         let entry_rtl = self.is_text_rtl(&entry.text);
         let indent_px = (entry.indent.min(3) as f32) * 20.0;
 
         if self.editing_entry_id == Some(entry.id) {
-            let edit_in = text_input("Edit entry...", &self.editing_text)
-                .on_input(Message::EditTextChanged)
-                .on_submit(Message::SaveEdit)
-                .size(13)
-                .padding([5, 8])
-                .align_x(if self.is_text_rtl(&self.editing_text) {
-                    Horizontal::Right
-                } else {
-                    Horizontal::Left
-                })
-                .style(move |_, status| input_style(p, status));
-
-            return container(
-                row![
-                    edit_in,
-                    pill_button("Save", true, p, Message::SaveEdit),
-                    pill_button("Cancel", false, p, Message::CancelEdit),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            let edit_rtl = ui_rtl || self.is_text_rtl(&self.editing_text);
+            let edit_font = if edit_rtl {
+                self.persian_text_font()
+            } else {
+                ui_font
+            };
+            let edit_in = text_input(
+                self.tr("Edit entry...", "ویرایش یادداشت..."),
+                &self.editing_text,
             )
-            .width(Length::Fill)
-            .padding([6, 8])
-            .style(move |_| pane_style(p.surface_high, p.primary))
-            .into();
+            .on_input(Message::EditTextChanged)
+            .on_submit(Message::SaveEdit)
+            .size(13)
+            .font(edit_font)
+            .padding([5, 8])
+            .align_x(if edit_rtl {
+                Horizontal::Right
+            } else {
+                Horizontal::Left
+            })
+            .style(move |_, status| input_style(p, status));
+
+            let save_btn = pill_button(self.tr("Save", "ذخیره"), true, p, ui_font, Message::SaveEdit);
+            let cancel_btn =
+                pill_button(self.tr("Cancel", "انصراف"), false, p, ui_font, Message::CancelEdit);
+
+            let edit_row = if ui_rtl {
+                row![cancel_btn, save_btn, edit_in]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+            } else {
+                row![edit_in, save_btn, cancel_btn]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+            };
+
+            return container(edit_row)
+                .width(Length::Fill)
+                .padding([6, 8])
+                .style(move |_| pane_style(p.surface_high, p.primary))
+                .into();
         }
 
         let time_txt = text(format!("[{}]", entry.time))
@@ -2100,64 +2817,81 @@ impl FolioApp {
             entry.text.clone()
         };
 
+        let body_font = if entry_rtl {
+            self.persian_text_font()
+        } else {
+            ui_font
+        };
         let body_txt = text(body_display)
             .size(13)
             .color(text_color)
+            .font(body_font)
             .shaping(text::Shaping::Advanced)
             .width(Length::Fill)
-            .align_x(if entry_rtl {
+            .align_x(if entry_rtl || ui_rtl {
                 Horizontal::Right
             } else {
                 Horizontal::Left
             });
 
-        let paper_label = if entry.paper_synced { "ok" } else { "paper" };
+        let paper_label = if entry.paper_synced {
+            self.tr("ok", "دفتر✓")
+        } else {
+            self.tr("paper", "دفتر")
+        };
         let actions = row![
-            mini_btn("↻", false, p, Message::CycleEntrySignifier(entry.id)),
-            mini_btn("←", false, p, Message::IndentEntry(entry.id, -1)),
-            mini_btn("→", false, p, Message::IndentEntry(entry.id, 1)),
+            mini_btn("↻", false, p, ui_font, Message::CycleEntrySignifier(entry.id)),
+            mini_btn("←", false, p, ui_font, Message::IndentEntry(entry.id, -1)),
+            mini_btn("→", false, p, ui_font, Message::IndentEntry(entry.id, 1)),
             mini_btn(
                 "~",
                 entry.signifier == Signifier::Cancelled,
                 p,
+                ui_font,
                 Message::ToggleEntryCancelled(entry.id),
             ),
             mini_btn(
                 "*",
                 entry.modifier == EntryModifier::Priority,
                 p,
+                ui_font,
                 Message::ToggleEntryPriority(entry.id),
             ),
             mini_btn(
                 "!",
                 entry.modifier == EntryModifier::Inspiration,
                 p,
+                ui_font,
                 Message::ToggleEntryInspiration(entry.id),
             ),
             mini_btn(
                 paper_label,
                 entry.paper_synced,
                 p,
+                ui_font,
                 Message::ToggleEntryPaper(entry.id),
             ),
             mini_btn(
                 ">",
                 self.migrating_entry_id == Some(entry.id),
                 p,
+                ui_font,
                 Message::ToggleMigratePicker(entry.id),
             ),
             mini_btn(
-                "Edit",
+                self.tr("Edit", "ویرایش"),
                 false,
                 p,
+                ui_font,
                 Message::StartEdit(entry.id, entry.text.clone()),
             ),
-            mini_btn("×", false, p, Message::DeleteEntry(entry.id)),
+            mini_btn("×", false, p, ui_font, Message::DeleteEntry(entry.id)),
         ]
         .spacing(2)
         .align_y(Alignment::Center);
 
-        let entry_row = if entry_rtl {
+        // Keep columns stable in AUTO/LTR mode; only mirror the row layout in full RTL (Persian) mode.
+        let entry_row = if ui_rtl {
             row![actions, body_txt, sig_btn, mod_txt, time_txt]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -2167,7 +2901,7 @@ impl FolioApp {
                 .align_y(Alignment::Center)
         };
 
-        let pad = if entry_rtl {
+        let pad = if ui_rtl {
             Padding {
                 top: 5.0,
                 right: 8.0 + indent_px,
@@ -2198,21 +2932,29 @@ impl FolioApp {
             .into()
     }
 
-    fn view_migrate_bar(&self, entry_id: usize, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_migrate_bar(
+        &self,
+        entry_id: usize,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
         let base_date = self.doc.date.unwrap_or_else(Vault::today_date);
         let tomorrow_rel = Vault::daily_rel_path(base_date + Duration::days(1));
 
         let mut bar = Row::new().spacing(4).align_y(Alignment::Center);
         bar = bar.push(
-            text("Migrate / Schedule:")
+            text(self.tr("Migrate / Schedule:", "انتقال / زمان‌بندی:"))
                 .size(11)
                 .color(p.tertiary)
+                .font(ui_font)
                 .shaping(text::Shaping::Advanced),
         );
         bar = bar.push(pill_button(
-            "Tomorrow (>)",
+            self.tr("Tomorrow (>)", "فردا (>)"),
             false,
             p,
+            ui_font,
             Message::MigrateTo {
                 entry_id,
                 target_rel: tomorrow_rel,
@@ -2221,11 +2963,15 @@ impl FolioApp {
         ));
 
         // Structured Future Log month buckets (next 3 months)
-        for ym in Vault::upcoming_months(Vault::today_date(), 4).into_iter().skip(1) {
+        for ym in Vault::upcoming_months(Vault::today_date(), 4)
+            .into_iter()
+            .skip(1)
+        {
             bar = bar.push(pill_button(
                 &format!("{ym} (<)"),
                 false,
                 p,
+                ui_font,
                 Message::ScheduleToMonth {
                     entry_id,
                     month_ym: ym,
@@ -2235,10 +2981,16 @@ impl FolioApp {
 
         for sp in &self.spaces {
             if !sp.is_daily && sp.rel_path != self.doc.rel_path {
+                let sp_font = if self.is_text_rtl(&sp.name) {
+                    self.persian_text_font()
+                } else {
+                    ui_font
+                };
                 bar = bar.push(pill_button(
                     &sp.name,
                     false,
                     p,
+                    sp_font,
                     Message::MigrateTo {
                         entry_id,
                         target_rel: sp.rel_path.clone(),
@@ -2260,26 +3012,50 @@ impl FolioApp {
             .into()
     }
 
-    fn view_inspector_pane(&self, p: Palette, ui_rtl: bool) -> Element<'_, Message> {
+    fn view_inspector_pane(&self, p: Palette, ui_rtl: bool, ui_font: Font) -> Element<'_, Message> {
         // [4] SIGNIFIERS
-        let sig_lines = [
-            (".", "Action (task)"),
-            ("×", "Completed"),
-            ("~", "Cancelled / Irrelevant"),
-            (">", "Migrated"),
-            ("<", "Scheduled"),
-            ("o", "Event"),
-            ("=", "Emotion"),
-            ("-", "Note"),
-            ("*", "Priority modifier"),
-            ("!", "Inspiration modifier"),
-        ];
+        let sig_lines = if ui_rtl {
+            [
+                (".", "کار (باز)"),
+                ("×", "انجام‌شده"),
+                ("~", "لغوشده / بی‌اهمیت"),
+                (">", "منتقل‌شده"),
+                ("<", "زمان‌بندی‌شده"),
+                ("o", "رویداد"),
+                ("=", "احساس"),
+                ("-", "یادداشت"),
+                ("*", "اولویت"),
+                ("!", "الهام / ایده"),
+            ]
+        } else {
+            [
+                (".", "Action (task)"),
+                ("×", "Completed"),
+                ("~", "Cancelled / Irrelevant"),
+                (">", "Migrated"),
+                ("<", "Scheduled"),
+                ("o", "Event"),
+                ("=", "Emotion"),
+                ("-", "Note"),
+                ("*", "Priority modifier"),
+                ("!", "Inspiration modifier"),
+            ]
+        };
 
         let mut sig_col = Column::new().spacing(2);
-        sig_col = sig_col.push(section_header("[4] SIGNIFIERS", p.primary, ui_rtl));
+        sig_col = sig_col.push(section_header(
+            self.tr("[4] SIGNIFIERS", "[۴] نشانه‌ها"),
+            p.primary,
+            ui_rtl,
+            ui_font,
+        ));
         for (sym, desc) in sig_lines {
             let s = text(sym).size(12).color(p.primary).width(Length::Fixed(16.0));
-            let d = text(desc).size(11).color(p.on_surface_variant);
+            let d = text(desc)
+                .size(11)
+                .color(p.on_surface_variant)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced);
             let r = if ui_rtl {
                 row![Space::new().width(Length::Fill), d, s].spacing(6)
             } else {
@@ -2297,15 +3073,21 @@ impl FolioApp {
         let pending = self.doc.paper_pending_count();
         let synced = self.doc.entries.len().saturating_sub(pending);
         let global_pending = self.global_paper.len();
-        let paper_summary = text(format!(
-            "Doc: {pending} pending · {synced} ok\nVault total: {global_pending} pending"
-        ))
+        let paper_summary = text(if ui_rtl {
+            format!(
+                "این صفحه: {pending} در انتظار · {synced} منتقل‌شده\nکل بایگانی: {global_pending} در انتظار"
+            )
+        } else {
+            format!("Doc: {pending} pending · {synced} ok\nVault total: {global_pending} pending")
+        })
         .size(11)
         .color(if global_pending > 0 {
             p.secondary
         } else {
             p.tertiary
         })
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced)
         .width(Length::Fill)
         .align_x(if ui_rtl {
             Horizontal::Right
@@ -2314,9 +3096,11 @@ impl FolioApp {
         });
 
         let mark_all_btn = button(
-            text("Mark Doc Synced")
+            text(self.tr("Mark Doc Synced", "ثبت انتقال این صفحه"))
                 .size(11)
                 .color(p.on_primary)
+                .font(ui_font)
+                .shaping(text::Shaping::Advanced)
                 .width(Length::Fill)
                 .align_x(Horizontal::Center),
         )
@@ -2326,11 +3110,17 @@ impl FolioApp {
         .on_press(Message::MarkAllPaperSynced);
 
         let global_queue_btn = button(
-            text(format!("Global Paper Queue ({global_pending})"))
-                .size(11)
-                .color(p.on_surface)
-                .width(Length::Fill)
-                .align_x(Horizontal::Center),
+            text(if ui_rtl {
+                format!("صف انتقال کل بایگانی ({global_pending})")
+            } else {
+                format!("Global Paper Queue ({global_pending})")
+            })
+            .size(11)
+            .color(p.on_surface)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced)
+            .width(Length::Fill)
+            .align_x(Horizontal::Center),
         )
         .width(Length::Fill)
         .padding([5, 8])
@@ -2339,7 +3129,12 @@ impl FolioApp {
 
         let paper_card = container(
             column![
-                section_header("[5] CARRY TO PAPER", p.secondary, ui_rtl),
+                section_header(
+                    self.tr("[5] CARRY TO PAPER", "[۵] انتقال به دفتر"),
+                    p.secondary,
+                    ui_rtl,
+                    ui_font,
+                ),
                 paper_summary,
                 mark_all_btn,
                 global_queue_btn,
@@ -2352,25 +3147,25 @@ impl FolioApp {
 
         // [6] .MD BUFFER
         let md_toggle = pill_button(
-            if self.show_md_preview { "Hide" } else { "Show" },
+            if self.show_md_preview {
+                self.tr("Hide", "پنهان")
+            } else {
+                self.tr("Show", "نمایش")
+            },
             false,
             p,
+            ui_font,
             Message::ToggleMdPreview,
         );
+        let md_title = text(self.tr("[6] .MD BUFFER", "[۶] پیش‌نمایش .MD"))
+            .size(11)
+            .color(p.primary)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
         let md_head = if ui_rtl {
-            row![
-                md_toggle,
-                Space::new().width(Length::Fill),
-                text("[6] .MD BUFFER").size(11).color(p.primary)
-            ]
-            .align_y(Alignment::Center)
+            row![md_toggle, Space::new().width(Length::Fill), md_title].align_y(Alignment::Center)
         } else {
-            row![
-                text("[6] .MD BUFFER").size(11).color(p.primary),
-                Space::new().width(Length::Fill),
-                md_toggle
-            ]
-            .align_y(Alignment::Center)
+            row![md_title, Space::new().width(Length::Fill), md_toggle].align_y(Alignment::Center)
         };
 
         let mut md_col = Column::new().spacing(6);
@@ -2381,6 +3176,7 @@ impl FolioApp {
                     text(self.raw_markdown.clone())
                         .size(11)
                         .color(p.on_surface_variant)
+                        .font(ui_font)
                         .shaping(text::Shaping::Advanced),
                 )
                 .height(Length::Fill),
@@ -2401,10 +3197,17 @@ impl FolioApp {
     }
 }
 
-fn section_header<'a>(title: &'a str, color: Color, ui_rtl: bool) -> Element<'a, Message> {
+fn section_header<'a>(
+    title: &'a str,
+    color: Color,
+    ui_rtl: bool,
+    font: Font,
+) -> Element<'a, Message> {
     text(title)
         .size(11)
         .color(color)
+        .font(font)
+        .shaping(text::Shaping::Advanced)
         .width(Length::Fill)
         .align_x(if ui_rtl {
             Horizontal::Right
@@ -2418,12 +3221,14 @@ fn pill_button<'a>(
     label: &str,
     active: bool,
     p: Palette,
+    font: Font,
     msg: Message,
 ) -> Element<'a, Message> {
     button(
         text(label.to_string())
             .size(11)
             .color(if active { p.on_primary } else { p.on_surface })
+            .font(font)
             .shaping(text::Shaping::Advanced),
     )
     .padding([4, 7])
@@ -2438,7 +3243,13 @@ fn pill_button<'a>(
     .into()
 }
 
-fn mini_btn<'a>(label: &str, active: bool, p: Palette, msg: Message) -> Element<'a, Message> {
+fn mini_btn<'a>(
+    label: &str,
+    active: bool,
+    p: Palette,
+    font: Font,
+    msg: Message,
+) -> Element<'a, Message> {
     button(
         text(label.to_string())
             .size(10)
@@ -2447,6 +3258,8 @@ fn mini_btn<'a>(label: &str, active: bool, p: Palette, msg: Message) -> Element<
             } else {
                 p.on_surface_variant
             })
+            .font(font)
+            .shaping(text::Shaping::Advanced)
             .align_y(Vertical::Center),
     )
     .padding([2, 4])
@@ -2576,5 +3389,106 @@ fn input_style(p: Palette, status: text_input::Status) -> text_input::Style {
         placeholder: p.on_surface_variant,
         value: p.on_surface,
         selection: Color { a: 0.35, ..p.primary },
+    }
+}
+
+/// Detect whether Vazirmatn and/or Dastkhat are installed in standard OS font directories
+/// (including subfolders created by `open-fonts-installer`). Adds 0 bytes to the binary.
+fn detect_installed_persian_fonts() -> (bool, bool) {
+    let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs_to_scan.push(home.join("Library").join("Fonts"));
+        dirs_to_scan.push(home.join(".local").join("share").join("fonts"));
+        dirs_to_scan.push(home.join(".fonts"));
+    }
+    if let Some(local_data) = dirs::data_local_dir() {
+        dirs_to_scan.push(local_data.join("Microsoft").join("Windows").join("Fonts"));
+    }
+    dirs_to_scan.push(PathBuf::from("/Library/Fonts"));
+    dirs_to_scan.push(PathBuf::from("/usr/share/fonts"));
+    dirs_to_scan.push(PathBuf::from("/usr/local/share/fonts"));
+    dirs_to_scan.push(PathBuf::from(r"C:\Windows\Fonts"));
+
+    let mut has_vazir = false;
+    let mut has_dastkhat = false;
+    for dir in dirs_to_scan {
+        scan_font_dir(&dir, 0, &mut has_vazir, &mut has_dastkhat);
+        if has_vazir && has_dastkhat {
+            break;
+        }
+    }
+    (has_vazir, has_dastkhat)
+}
+
+fn scan_font_dir(dir: &Path, depth: usize, has_vazir: &mut bool, has_dastkhat: &mut bool) {
+    if depth > 3 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_font_dir(&path, depth + 1, has_vazir, has_dastkhat);
+        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".ttf") || lower.ends_with(".otf") {
+                if lower.contains("vazir") {
+                    *has_vazir = true;
+                }
+                if lower.contains("dastkhat") {
+                    *has_dastkhat = true;
+                }
+            }
+        }
+    }
+}
+
+/// Launch `open-fonts-installer` (https://github.com/HamidRezaAshkiyan/open-fonts-installer)
+/// in the background to install Vazirmatn & Dastkhat without bundling font binaries in Folio.
+fn install_persian_fonts_via_open_fonts_installer() -> Result<String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("pwsh")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/HamidRezaAshkiyan/open-fonts-installer/main/install-fonts.ps1))) -Fonts vazirmatn,dastkhat",
+            ])
+            .spawn()?;
+        Ok("در حال نصب وزیرمتن و دست‌خط با open-fonts-installer — پس از پایان برنامه را مجدداً باز کنید".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("bash")
+            .args([
+                "-c",
+                "curl -fsSL https://raw.githubusercontent.com/HamidRezaAshkiyan/open-fonts-installer/main/install-fonts.sh | bash -s -- vazirmatn dastkhat",
+            ])
+            .spawn()?;
+        Ok("در حال نصب وزیرمتن و دست‌خط با open-fonts-installer — پس از پایان برنامه را مجدداً باز کنید".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn scans_font_subfolders_for_vazirmatn_and_dastkhat() {
+        let dir = tempdir().unwrap();
+        let sub_v = dir.path().join("vazirmatn");
+        let sub_d = dir.path().join("dastkhat");
+        fs::create_dir_all(&sub_v).unwrap();
+        fs::create_dir_all(&sub_d).unwrap();
+        fs::write(sub_v.join("Vazirmatn-Regular.ttf"), b"fake").unwrap();
+        fs::write(sub_d.join("Dastkhat[wght].ttf"), b"fake").unwrap();
+
+        let (mut has_v, mut has_d) = (false, false);
+        scan_font_dir(dir.path(), 0, &mut has_v, &mut has_d);
+        assert!(has_v);
+        assert!(has_d);
     }
 }
