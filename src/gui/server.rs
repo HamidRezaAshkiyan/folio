@@ -1,3 +1,4 @@
+use crate::core::config::{FolioConfig, RtlMode, expand_tilde};
 use crate::core::io::{ExportFormat, ImportFormat, export_document, import_from_str};
 use crate::core::markdown::serialize_markdown;
 use crate::core::model::{
@@ -8,6 +9,7 @@ use crate::core::vault::Vault;
 use anyhow::{Context, Result};
 use chrono::Duration;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const INDEX_HTML: &str = include_str!("index.html");
@@ -88,9 +90,36 @@ struct ImportReq {
     content: String,
 }
 
-pub fn run_gui(vault: Vault, default_page: u32, port: u16, open_browser: bool) -> Result<()> {
+#[derive(Serialize)]
+struct ConfigResponse {
+    vault_path: String,
+    config_path: String,
+    notebook_page: u32,
+    default_spaces: Vec<String>,
+    rtl_mode: RtlMode,
+    gui_theme: String,
+    persian_font: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateConfigReq {
+    #[serde(default)]
+    vault_path: Option<String>,
+    #[serde(default)]
+    notebook_page: Option<u32>,
+    #[serde(default)]
+    default_spaces: Option<Vec<String>>,
+    #[serde(default)]
+    rtl_mode: Option<RtlMode>,
+    #[serde(default)]
+    gui_theme: Option<String>,
+    #[serde(default)]
+    persian_font: Option<String>,
+}
+
+pub fn run_gui(mut vault: Vault, mut config: FolioConfig, port: u16, open_browser: bool) -> Result<()> {
     let today = Vault::today_date();
-    let _ = vault.open_or_create_daily(today, default_page)?;
+    let _ = vault.open_or_create_daily(today, config.notebook_page)?;
 
     let addr = format!("127.0.0.1:{port}");
     let server = Server::http(&addr)
@@ -106,18 +135,31 @@ pub fn run_gui(vault: Vault, default_page: u32, port: u16, open_browser: bool) -
     }
 
     for mut req in server.incoming_requests() {
-        let resp = handle_request(&vault, default_page, &mut req);
+        let resp = handle_request(&mut vault, &mut config, &mut req);
         let _ = req.respond(resp);
     }
 
     Ok(())
 }
 
+fn build_config_response(vault: &Vault, config: &FolioConfig) -> ConfigResponse {
+    ConfigResponse {
+        vault_path: vault.root.to_string_lossy().to_string(),
+        config_path: FolioConfig::config_path().to_string_lossy().to_string(),
+        notebook_page: config.notebook_page,
+        default_spaces: config.default_spaces.clone(),
+        rtl_mode: config.rtl_mode,
+        gui_theme: config.gui_theme.clone(),
+        persian_font: config.persian_font.clone(),
+    }
+}
+
 fn handle_request(
-    vault: &Vault,
-    default_page: u32,
+    vault: &mut Vault,
+    config: &mut FolioConfig,
     req: &mut Request,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
+    let default_page = config.notebook_page;
     let url = req.url().to_string();
     let (route, query) = url.split_once('?').unwrap_or((&url, ""));
 
@@ -125,6 +167,73 @@ fn handle_request(
         (Method::Get, "/") | (Method::Get, "/index.html") => {
             html_response(&INDEX_HTML.replace("{{VERSION}}", env!("CARGO_PKG_VERSION")))
         }
+        (Method::Get, "/api/config") => {
+            let cfg = build_config_response(vault, config);
+            json_response(StatusCode(200), &cfg)
+        }
+        (Method::Post, "/api/config") => match read_json::<UpdateConfigReq>(req) {
+            Ok(body) => {
+                if let Some(page) = body.notebook_page
+                    && page > 0
+                {
+                    config.notebook_page = page;
+                }
+                if let Some(spaces) = body.default_spaces {
+                    let clean: Vec<String> = spaces
+                        .into_iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !clean.is_empty() {
+                        config.default_spaces = clean;
+                    }
+                }
+                if let Some(rtl) = body.rtl_mode {
+                    config.rtl_mode = rtl;
+                }
+                if let Some(theme) = body.gui_theme
+                    && (theme == "dark" || theme == "light")
+                {
+                    config.gui_theme = theme;
+                }
+                if let Some(font) = body.persian_font
+                    && !font.trim().is_empty()
+                {
+                    config.persian_font = font.trim().to_string();
+                }
+
+                if let Some(raw_vault) = body.vault_path {
+                    let trimmed = raw_vault.trim();
+                    if trimmed.is_empty() {
+                        return error_response(400, "vault_path cannot be empty");
+                    }
+                    let expanded = expand_tilde(PathBuf::from(trimmed));
+                    match Vault::open_or_init(expanded.clone(), &config.default_spaces) {
+                        Ok(new_vault) => {
+                            config.vault_path = expanded;
+                            *vault = new_vault;
+                        }
+                        Err(e) => return error_response(400, &format!("failed to open vault: {e}")),
+                    }
+                }
+
+                if let Err(e) = config.save() {
+                    return error_response(500, &format!("failed to save config: {e}"));
+                }
+
+                match build_state(vault, config.notebook_page, None) {
+                    Ok(state) => json_response(
+                        StatusCode(200),
+                        &serde_json::json!({
+                            "config": build_config_response(vault, config),
+                            "state": state,
+                        }),
+                    ),
+                    Err(e) => error_response(500, &e.to_string()),
+                }
+            }
+            Err(e) => error_response(400, &e.to_string()),
+        },
         (Method::Get, "/api/state") => {
             let rel = get_query_param(query, "path");
             match build_state(vault, default_page, rel.as_deref()) {

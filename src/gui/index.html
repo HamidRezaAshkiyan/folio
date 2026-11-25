@@ -360,7 +360,91 @@
       border-radius: 4px;
       padding: 8px;
       font-family: inherit;
+      font-size: max(1rem, 1em);
+    }
+    input.field:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    dialog.settings-dialog {
+      margin: auto;
+      width: min(560px, 94vw);
+      max-height: 90vh;
+      overflow-y: auto;
+      background: var(--surface-low);
+      color: var(--on-surface);
+      border: 1px solid var(--primary);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    dialog.settings-dialog[open] {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    dialog:modal {
+      overscroll-behavior: contain;
+    }
+    dialog::backdrop {
+      background: rgba(0, 0, 0, 0.62);
+      overflow: hidden;
+      overscroll-behavior: contain;
+    }
+    .settings-dialog h1 {
+      font-size: 14px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .settings-form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .form-group label {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      font-weight: 600;
+    }
+    .form-hint {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+    .settings-fieldset {
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: center;
+    }
+    .settings-fieldset legend {
+      font-size: 11px;
+      color: var(--primary);
+      padding: 0 6px;
+      font-weight: 600;
+    }
+    .radio-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-size: 12px;
+      cursor: pointer;
+    }
+    .radio-option input[type="radio"] {
+      accent-color: var(--primary);
+      width: 15px;
+      height: 15px;
+    }
+    .settings-status {
+      min-height: 18px;
+      font-size: 11px;
+      color: var(--tertiary);
     }
   </style>
 </head>
@@ -385,6 +469,7 @@
         <button type="button" id="monthly-btn" class="btn">Monthly</button>
         <button type="button" id="import-btn" class="btn">:imp</button>
         <button type="button" id="export-btn" class="btn">Export</button>
+        <button type="button" id="settings-btn" class="btn">Settings</button>
         <button type="button" id="theme-btn" class="btn">Theme</button>
         <span class="badge">[SYNCED .md]</span>
       </div>
@@ -511,6 +596,90 @@
       <div id="migrate-targets" style="display:flex;flex-direction:column;gap:6px;"></div>
     </div>
   </div>
+
+  <!-- Settings Modal Dialog -->
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title" closedby="any">
+    <div class="sec-head">
+      <h1 id="settings-title">Folio Settings</h1>
+      <button type="button" id="close-settings" class="mini-btn" aria-label="Close settings">✕</button>
+    </div>
+    <form id="settings-form" class="settings-form" action="/api/config" method="POST" aria-labelledby="settings-title">
+      <div class="form-group">
+        <label for="cfg-vault-path">Vault Folder <span aria-hidden="true">*</span></label>
+        <input
+          id="cfg-vault-path"
+          name="vault_path"
+          class="field"
+          type="text"
+          required
+          autofocus
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          aria-describedby="cfg-vault-help"
+        >
+        <span id="cfg-vault-help" class="form-hint">Directory for your Obsidian-compatible Markdown files (supports <code>~/</code>). Switching initializes missing folders automatically.</span>
+      </div>
+
+      <div class="form-group">
+        <label for="cfg-notebook-page">Default Notebook Page</label>
+        <input
+          id="cfg-notebook-page"
+          name="notebook_page"
+          class="field"
+          type="text"
+          inputmode="numeric"
+          pattern="[1-9][0-9]*"
+          required
+          aria-describedby="cfg-page-help"
+        >
+        <span id="cfg-page-help" class="form-hint">Starting physical notebook page number for new Daily Notes.</span>
+      </div>
+
+      <div class="form-group">
+        <label for="cfg-default-spaces">Default Spaces (comma-separated)</label>
+        <input
+          id="cfg-default-spaces"
+          name="default_spaces"
+          class="field"
+          type="text"
+          aria-describedby="cfg-spaces-help"
+        >
+        <span id="cfg-spaces-help" class="form-hint">Collections created automatically when initializing a new vault.</span>
+      </div>
+
+      <fieldset class="settings-fieldset">
+        <legend>Theme</legend>
+        <label class="radio-option">
+          <input type="radio" name="gui_theme" value="dark"> Dark
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="gui_theme" value="light"> Light
+        </label>
+      </fieldset>
+
+      <fieldset class="settings-fieldset">
+        <legend>Text Direction</legend>
+        <label class="radio-option">
+          <input type="radio" name="rtl_mode" value="auto"> AUTO
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="rtl_mode" value="ltr"> LTR
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="rtl_mode" value="rtl"> RTL (Persian)
+        </label>
+      </fieldset>
+
+      <div class="form-hint">Config file: <code id="cfg-file-path">~/.config/folio/config.toml</code></div>
+      <div id="settings-status" class="settings-status" role="status" aria-live="polite"></div>
+
+      <div class="row-flex" style="justify-content: flex-end;">
+        <button type="button" id="cancel-settings" class="btn">Cancel</button>
+        <button type="submit" id="save-settings" class="btn btn-primary">Save Settings</button>
+      </div>
+    </form>
+  </dialog>
 
   <script>
     const state = {
@@ -937,6 +1106,94 @@
     };
     document.getElementById('close-migrate').onclick = () =>
       document.getElementById('migrate-modal').classList.remove('open');
+
+    // Settings native <dialog>
+    const settingsDialog = document.getElementById('settings-dialog');
+    const settingsForm = document.getElementById('settings-form');
+    const settingsStatus = document.getElementById('settings-status');
+
+    // Fallback light-dismiss for browsers without HTMLDialogElement.prototype.closedBy
+    if (!('closedBy' in HTMLDialogElement.prototype)) {
+      const outside = (e, dialog) => {
+        const r = dialog.getBoundingClientRect();
+        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      };
+      let pressedOutside = false;
+      settingsDialog.addEventListener('pointerdown', (e) => { pressedOutside = outside(e, settingsDialog); });
+      settingsDialog.addEventListener('pointerup', (e) => {
+        if (pressedOutside && outside(e, settingsDialog)) settingsDialog.close();
+      });
+    }
+
+    async function openSettingsDialog() {
+      settingsStatus.textContent = '';
+      try {
+        const res = await fetch('/api/config');
+        const cfg = await res.json();
+        document.getElementById('cfg-vault-path').value = cfg.vault_path || '';
+        document.getElementById('cfg-notebook-page').value = String(cfg.notebook_page || 1);
+        document.getElementById('cfg-default-spaces').value = (cfg.default_spaces || []).join(', ');
+        document.getElementById('cfg-file-path').textContent = cfg.config_path || '~/.config/folio/config.toml';
+        const themeRadio = settingsForm.querySelector(`input[name="gui_theme"][value="${cfg.gui_theme || 'dark'}"]`);
+        if (themeRadio) themeRadio.checked = true;
+        const rtlRadio = settingsForm.querySelector(`input[name="rtl_mode"][value="${cfg.rtl_mode || 'auto'}"]`);
+        if (rtlRadio) rtlRadio.checked = true;
+      } catch (err) {
+        settingsStatus.textContent = `Could not load settings: ${err.message}`;
+      }
+      settingsDialog.showModal();
+    }
+
+    document.getElementById('settings-btn').addEventListener('click', openSettingsDialog);
+    document.getElementById('close-settings').addEventListener('click', () => settingsDialog.close());
+    document.getElementById('cancel-settings').addEventListener('click', () => settingsDialog.close());
+
+    settingsForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      if (!settingsForm.reportValidity()) return;
+      const saveBtn = document.getElementById('save-settings');
+      saveBtn.disabled = true;
+      settingsStatus.textContent = 'Saving...';
+
+      const formData = new FormData(settingsForm);
+      const vaultPath = String(formData.get('vault_path') || '').trim();
+      const pageNum = parseInt(String(formData.get('notebook_page') || '1'), 10) || 1;
+      const spaces = String(formData.get('default_spaces') || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const guiTheme = String(formData.get('gui_theme') || 'dark');
+      const rtlMode = String(formData.get('rtl_mode') || 'auto');
+
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vault_path: vaultPath,
+            notebook_page: pageNum,
+            default_spaces: spaces,
+            gui_theme: guiTheme,
+            rtl_mode: rtlMode,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Failed to save settings');
+        if (json.state) {
+          state.data = json.state;
+          state.relPath = json.state.rel_path;
+          render();
+        }
+        document.documentElement.classList.toggle('light', guiTheme === 'light');
+        document.documentElement.classList.toggle('dark', guiTheme !== 'light');
+        settingsStatus.textContent = 'Settings saved and applied.';
+        setTimeout(() => settingsDialog.close(), 450);
+      } catch (err) {
+        settingsStatus.textContent = `Error: ${err.message}`;
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
 
     api('/api/state');
   </script>

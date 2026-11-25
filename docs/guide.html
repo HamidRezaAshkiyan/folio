@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const saved = localStorage.getItem('folio-site-theme');
+      const scheme = saved === 'light' ? 'light' : (saved === 'dark' ? 'dark' : 'dark');
+      document.querySelector('meta[name="color-scheme"]').content = saved || 'light dark';
+      document.documentElement.classList.toggle('light', scheme === 'light');
+      document.documentElement.classList.toggle('dark', scheme !== 'light');
+    } catch {}
+  </script>
+  <title>Bullet Journal Guide — Folio</title>
+  <meta name="description" content="A minimal, complete guide to the Bullet Journal (BuJo) method: Rapid Logging, Signifiers, Modifiers, Index, Future Log, Monthly & Daily Logs, Collections, and Migration.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2315130E' stroke='%23B1C7F1' stroke-width='3'/%3E%3Ccircle cx='22' cy='22' r='4.5' fill='%23B1C7F1'/%3E%3Cline x1='32' y1='22' x2='48' y2='22' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='34' r='4.5' fill='none' stroke='%23E5C281' stroke-width='3'/%3E%3Cline x1='32' y1='34' x2='44' y2='34' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='44' x2='26' y2='44' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='49' x2='26' y2='49' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='32' y1='46.5' x2='46' y2='46.5' stroke='%23C4C6CF' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --primary: #B1C7F1;
+      --on-primary: #1A3152;
+      --secondary: #FFB4A8;
+      --tertiary: #E5C281;
+      --surface: #15130E;
+      --surface-lowest: #100E09;
+      --surface-low: #1E1B16;
+      --surface-container: #221F1A;
+      --surface-high: #2C2A24;
+      --on-surface: #E8E2D9;
+      --on-surface-variant: #C4C6CF;
+      --outline-variant: #44474E;
+      --glow-primary: rgba(177, 199, 241, 0.08);
+      --glow-tertiary: rgba(229, 194, 129, 0.06);
+      --mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    }
+
+    :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+      color-scheme: dark;
+    }
+    :root:has(> head > meta[name="color-scheme"][content="light"]) {
+      color-scheme: light;
+    }
+
+    html.light {
+      --primary: #0A2344;
+      --on-primary: #FFFFFF;
+      --secondary: #A03F32;
+      --tertiary: #7A5400;
+      --surface: #FFF8F0;
+      --surface-lowest: #FFFFFF;
+      --surface-low: #F9F3EA;
+      --surface-container: #F4EDE4;
+      --surface-high: #EEE7DE;
+      --on-surface: #1E1B16;
+      --on-surface-variant: #52555E;
+      --outline-variant: #D0C9BE;
+      --glow-primary: rgba(10, 35, 68, 0.05);
+      --glow-tertiary: rgba(122, 84, 0, 0.05);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background-color: var(--surface);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, var(--glow-primary), transparent 65%),
+        radial-gradient(ellipse 60% 40% at 85% 20%, var(--glow-tertiary), transparent 60%);
+      color: var(--on-surface);
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.7;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+
+    /* Sticky Top Navigation */
+    .nav-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--surface) 84%, transparent);
+      border-bottom: 1px solid var(--outline-variant);
+    }
+
+    nav.topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      height: 58px;
+    }
+
+    .brand-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--on-surface);
+      font-weight: 700;
+      font-size: 14px;
+      text-decoration: none !important;
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: var(--surface-lowest);
+      border: 1px solid var(--primary);
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 12.5px;
+    }
+
+    .nav-links a {
+      color: var(--on-surface-variant);
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover, .nav-links a[aria-current="page"] {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .nav-actions { display: flex; align-items: center; gap: 8px; }
+
+    @media (max-width: 680px) {
+      .nav-links { gap: 12px; font-size: 11.5px; }
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-low);
+      color: var(--on-surface);
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      text-decoration: none !important;
+    }
+    .btn:hover { background: var(--surface-high); border-color: var(--primary); }
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+    .btn-primary:hover { opacity: 0.92; }
+
+    /* Page Header */
+    header.page-hero {
+      padding: 56px 0 36px;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 55%, transparent);
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tertiary);
+      margin-bottom: 10px;
+    }
+
+    header.page-hero h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(32px, 5vw, 48px);
+      line-height: 1.12;
+      letter-spacing: -0.02em;
+      margin-bottom: 14px;
+    }
+
+    header.page-hero h1 em { font-style: italic; color: var(--primary); }
+
+    .lead {
+      color: var(--on-surface-variant);
+      max-width: 680px;
+      font-size: 14px;
+    }
+
+    /* Quick TOC */
+    .toc-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .toc-pill {
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+    }
+    .toc-pill:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    /* Sections */
+    main section {
+      padding: 44px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 45%, transparent);
+    }
+
+    main section:last-of-type { border-bottom: none; }
+
+    .sec-kicker {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tertiary);
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(24px, 3.5vw, 32px);
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--on-surface);
+      margin-bottom: 6px;
+    }
+
+    p { color: var(--on-surface-variant); margin-bottom: 14px; }
+    p strong { color: var(--on-surface); }
+
+    code {
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 12px;
+      color: var(--on-surface);
+    }
+
+    /* Cards & Panes */
+    .pane {
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    @media (max-width: 760px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+
+    /* Signifier cards */
+    .sig-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+    }
+
+    .sig-glyph {
+      width: 34px;
+      height: 34px;
+      border-radius: 6px;
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .c-primary { color: var(--primary); }
+    .c-secondary { color: var(--secondary); }
+    .c-tertiary { color: var(--tertiary); }
+    .c-muted { color: var(--on-surface-variant); }
+
+    .sig-body p { font-size: 12.5px; margin-bottom: 0; }
+
+    /* Sample Spread */
+    .spread {
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-top: 16px;
+      font-size: 12.5px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .spread-head {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--outline-variant);
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+      font-size: 11.5px;
+      color: var(--tertiary);
+      font-weight: 600;
+    }
+
+    .spread-line { display: flex; gap: 10px; }
+    .spread-sym { width: 18px; text-align: center; font-weight: 700; flex-shrink: 0; }
+    .spread-done { text-decoration: line-through; color: var(--on-surface-variant); }
+
+    /* Callout */
+    .callout {
+      border-inline-start: 3px solid var(--tertiary);
+      background: var(--surface-container);
+      padding: 12px 16px;
+      border-radius: 0 6px 6px 0;
+      margin-top: 16px;
+      font-size: 12.5px;
+      color: var(--on-surface);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--outline-variant);
+      padding: 28px 0 40px;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .footer-links { display: flex; flex-wrap: wrap; gap: 16px; }
+  </style>
+</head>
+<body>
+  <div class="nav-wrap">
+    <div class="container">
+      <nav class="topbar" aria-label="Primary">
+        <a href="index.html" class="brand-link">
+          <span class="brand-mark">.</span>
+          <span>folio</span>
+        </a>
+        <div class="nav-links">
+          <a href="index.html">Home</a>
+          <a href="guide.html" aria-current="page">BuJo Guide</a>
+          <a href="docs.html">Docs</a>
+        </div>
+        <div class="nav-actions">
+          <button id="theme-toggle" class="btn" type="button" aria-label="Toggle color theme">☀ Light</button>
+          <a class="btn btn-primary" href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">GitHub ↗</a>
+        </div>
+      </nav>
+    </div>
+  </div>
+
+  <header class="page-hero">
+    <div class="container">
+      <div class="eyebrow">Minimal Field Guide</div>
+      <h1>The <em>Bullet Journal</em> Method, distilled.</h1>
+      <p class="lead">
+        Created by Ryder Carroll, the Bullet Journal (BuJo) is a mindfulness practice disguised as a productivity system. No templates, no elaborate spreads — just a pen, a notebook, and short objective bullets that help you track the past, order the present, and design the future.
+      </p>
+      <div class="toc-strip" aria-label="On this page">
+        <a class="toc-pill" href="#rapid-logging">1. Rapid Logging</a>
+        <a class="toc-pill" href="#task-states">2. Task States</a>
+        <a class="toc-pill" href="#modifiers">3. Signifiers</a>
+        <a class="toc-pill" href="#modules">4. Core Modules</a>
+        <a class="toc-pill" href="#collections">5. Collections</a>
+        <a class="toc-pill" href="#migration">6. Migration &amp; Reflection</a>
+        <a class="toc-pill" href="#paper-bridge">7. Carry to Paper</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 1. Rapid Logging -->
+    <section id="rapid-logging">
+      <div class="sec-kicker">01 · The Language</div>
+      <h2>Rapid Logging</h2>
+      <p>
+        Rapid Logging replaces long-form sentences with short, scannable entries categorized by a single symbol at the start of the line. Every entry has four parts: a <strong>Topic</strong> (the page header), a <strong>Page Number</strong>, a <strong>Bullet</strong>, and a <strong>Short Sentence</strong>.
+      </p>
+
+      <div class="grid-2">
+        <div class="sig-row">
+          <div class="sig-glyph c-primary">.</div>
+          <div class="sig-body">
+            <h3>Task / Action</h3>
+            <p>Something you need to do. Keep it concrete and actionable — "Email Maya the layout proof", not "Zine".</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-tertiary">o</div>
+          <div class="sig-body">
+            <h3>Event</h3>
+            <p>Date-related experiences — meetings, birthdays, trips. Logged objectively before or after they happen.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-muted">-</div>
+          <div class="sig-body">
+            <h3>Note</h3>
+            <p>Facts, ideas, quotes, or observations you don't want to forget. Zero pressure to act on them.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-secondary">=</div>
+          <div class="sig-body">
+            <h3>Emotion <span class="c-muted">(Folio Extension)</span></h3>
+            <p>A brief check-in on how you feel. Tracking mood alongside tasks reveals what gives or drains your energy.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="spread" aria-label="Sample Daily Log">
+        <div class="spread-head">
+          <span>2026-11-25 · WEDNESDAY</span>
+          <span>Notebook p. 42</span>
+        </div>
+        <div class="spread-line"><span class="spread-sym c-primary">.</span><span>Finalize studio lighting sketch before critique</span></div>
+        <div class="spread-line"><span class="spread-sym c-tertiary">o</span><span>Coffee with Maya at Blue Bottle — discussed cover stock</span></div>
+        <div class="spread-line"><span class="spread-sym c-muted">-</span><span>120gsm cream uncoated paper feels warmer under north light</span></div>
+        <div class="spread-line"><span class="spread-sym c-secondary">=</span><span>Calm and focused after walking without headphones</span></div>
+        <div class="spread-line"><span class="spread-sym c-muted">×</span><span class="spread-done">Order fountain pen ink refill (Iroshizuku Shin-kai)</span></div>
+      </div>
+    </section>
+
+    <!-- 2. Task States -->
+    <section id="task-states">
+      <div class="sec-kicker">02 · Lifecycle</div>
+      <h2>Task States</h2>
+      <p>
+        A task dot (<code>.</code>) is designed to be transformed in place as its fate becomes clear. You never erase history — you mark what happened to it.
+      </p>
+
+      <div class="grid-2">
+        <div class="sig-row">
+          <div class="sig-glyph c-muted">×</div>
+          <div class="sig-body">
+            <h3>Completed</h3>
+            <p>Turn <code>.</code> into <code>×</code> when finished. Seeing completed crosses builds honest momentum.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-primary">&gt;</div>
+          <div class="sig-body">
+            <h3>Migrated</h3>
+            <p>Moved forward to tomorrow's Daily Log, the Monthly Log, or a dedicated Collection.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-primary">&lt;</div>
+          <div class="sig-body">
+            <h3>Scheduled</h3>
+            <p>Pushed back into the <strong>Future Log</strong> for a later month when it's not actionable yet.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-muted">~</div>
+          <div class="sig-body">
+            <h3>Irrelevant / Cancelled</h3>
+            <p>Strike through tasks that no longer matter. Dropping unimportant work is a win, not a failure.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Signifiers / Modifiers -->
+    <section id="modifiers">
+      <div class="sec-kicker">03 · Emphasis</div>
+      <h2>Signifiers (Modifiers)</h2>
+      <p>
+        Signifiers sit immediately to the left of a bullet to give extra context at a glance. Keep them minimal — two is usually enough.
+      </p>
+      <div class="grid-2">
+        <div class="sig-row">
+          <div class="sig-glyph c-tertiary">*</div>
+          <div class="sig-body">
+            <h3>Priority (<code>*.</code>)</h3>
+            <p>Marks the 1–3 things that truly deserve your attention today. If everything is starred, nothing is.</p>
+          </div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-glyph c-secondary">!</div>
+          <div class="sig-body">
+            <h3>Inspiration (<code>!-</code>)</h3>
+            <p>Highlights great ideas, insights, or quotes you want to spot quickly when flipping back through pages.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Core Modules -->
+    <section id="modules">
+      <div class="sec-kicker">04 · Structure</div>
+      <h2>The Four Core Modules</h2>
+      <p>
+        Every Bullet Journal is built from just four interlocking sections. Together they zoom smoothly from the year down to the hour.
+      </p>
+
+      <div class="grid-2">
+        <div class="pane">
+          <h3>1. Index <code>Index.md</code></h3>
+          <p>
+            The first pages of your notebook act as a living table of contents. Whenever you start a new Monthly Log or Collection, record its title and page number. If a topic continues later in the book, use <strong>Page Threading</strong> (e.g. <code>p. 14, 27, 41</code>) to link non-contiguous pages.
+          </p>
+        </div>
+        <div class="pane">
+          <h3>2. Future Log <code>Future Log.md</code></h3>
+          <p>
+            A 6-month horizon divided into monthly buckets. Park upcoming trips, deadlines, and scheduled tasks (<code>&lt;</code>) that belong outside the current month so they stay out of today's noise until their month arrives.
+          </p>
+        </div>
+        <div class="pane">
+          <h3>3. Monthly Log <code>YYYY-MM-monthly.md</code></h3>
+          <p>
+            A two-part bird's-eye view of the current month: a <strong>Calendar Page</strong> (dates 1–31 with brief events/milestones) and a <strong>Monthly Task List</strong> (key priorities and unfinished tasks migrated from last month).
+          </p>
+        </div>
+        <div class="pane">
+          <h3>4. Daily Log <code>Daily Notes/YYYY-MM-DD.md</code></h3>
+          <p>
+            Your day-to-day workhorse. Don't pre-draw days ahead of time — write today's date and log as much or as little as the day requires. Some days take three lines; others take two pages.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Collections -->
+    <section id="collections">
+      <div class="sec-kicker">05 · Modularity</div>
+      <h2>Custom Collections (Spaces)</h2>
+      <p>
+        Whenever related entries start piling up — a book list, a studio project, health notes, or meeting takeaways — give them their own dedicated spread. Turn to the next blank page, give it a title, add it to the Index, and log freely.
+      </p>
+      <p>
+        In Folio, Custom Collections are called <strong>Spaces</strong> (stored as plain Markdown files under <code>Spaces/</code>, such as <code>Studio &amp; Work</code>, <code>Reading &amp; Study</code>, and <code>Personal</code>).
+      </p>
+    </section>
+
+    <!-- 6. Migration & Reflection -->
+    <section id="migration">
+      <div class="sec-kicker">06 · The Habit</div>
+      <h2>Migration &amp; Reflection</h2>
+      <p>
+        Writing bullets is only half the method. The real magic happens during <strong>Migration</strong> — pausing regularly to review open tasks and ask a simple question: <em>"Is this still worth my time?"</em>
+      </p>
+
+      <div class="grid-3">
+        <div class="pane">
+          <h3>AM Reflection</h3>
+          <p>Scan yesterday's open tasks. Pick 1–3 priorities (<code>*</code>) for today. Leave the rest behind or cancel them.</p>
+        </div>
+        <div class="pane">
+          <h3>PM Reflection</h3>
+          <p>Cross off completed items (<code>×</code>), note a brief emotion (<code>=</code>), and clear your head before sleep.</p>
+        </div>
+        <div class="pane">
+          <h3>Monthly Migration</h3>
+          <p>Set up the new Monthly Log, pull items from the Future Log, and intentionally migrate (<code>&gt;</code>) only what still matters.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <strong>Why friction is a feature:</strong> Having to consciously move a task forces you to confront busywork. If you've migrated the same task three times, either break it down or strike it out (<code>~</code>).
+      </div>
+    </section>
+
+    <!-- 7. Carry to Paper -->
+    <section id="paper-bridge">
+      <div class="sec-kicker">07 · Analog + Digital</div>
+      <h2>Carry to Paper</h2>
+      <p>
+        Paper is unbeatable for thinking, but you won't always have your notebook open on the bus or at your desk. Folio bridges that gap with a lightweight <strong>Carry to Paper</strong> tag: every new digital entry starts as <code>[paper:no]</code>.
+      </p>
+      <p>
+        At the end of the day, open your physical notebook, transcribe the entries that belong on paper, and flip them to <code>[paper:ok]</code>. You keep the speed of a keyboard without abandoning the calm of ink and paper.
+      </p>
+      <div style="margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px;">
+        <a href="docs.html" class="btn btn-primary">Read Folio Documentation →</a>
+        <a href="index.html#demo" class="btn">Try the Interactive Preview</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <div>
+        <strong style="color: var(--on-surface);">Folio</strong> · Built in Rust · Released under the MIT License
+      </div>
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+        <a href="guide.html">BuJo Guide</a>
+        <a href="docs.html">Docs</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/releases" target="_blank" rel="noopener">Releases</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const htmlEl = document.documentElement;
+    const themeBtn = document.getElementById('theme-toggle');
+    const colorMeta = document.querySelector('meta[name="color-scheme"]');
+
+    function syncThemeUI() {
+      const isLight = htmlEl.classList.contains('light');
+      themeBtn.textContent = isLight ? '☾ Dark' : '☀ Light';
+    }
+    syncThemeUI();
+
+    themeBtn.addEventListener('click', () => {
+      const isLight = htmlEl.classList.toggle('light');
+      htmlEl.classList.toggle('dark', !isLight);
+      const scheme = isLight ? 'light' : 'dark';
+      colorMeta.content = scheme;
+      try { localStorage.setItem('folio-site-theme', scheme); } catch {}
+      syncThemeUI();
+    });
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'folio-site-theme' && (e.newValue === 'light' || e.newValue === 'dark')) {
+        htmlEl.classList.toggle('light', e.newValue === 'light');
+        htmlEl.classList.toggle('dark', e.newValue !== 'light');
+        colorMeta.content = e.newValue;
+        syncThemeUI();
+      }
+    });
+  </script>
+</body>
+</html>

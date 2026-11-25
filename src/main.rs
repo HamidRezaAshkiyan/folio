@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     if cli.gui {
         gui::run_native_gui(vault, cfg)
     } else if cli.web {
-        gui::run_web_gui(vault, cfg.notebook_page, cli.port, !cli.no_open)
+        gui::run_web_gui(vault, cfg, cli.port, !cli.no_open)
     } else {
         // Default to TUI (`folio` or `folio --tui`)
         tui::run_tui(vault, cfg.notebook_page)

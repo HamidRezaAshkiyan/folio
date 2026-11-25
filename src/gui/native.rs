@@ -1,4 +1,4 @@
-use crate::core::config::{FolioConfig, RtlMode};
+use crate::core::config::{FolioConfig, RtlMode, expand_tilde};
 use crate::core::io::{ExportFormat, ImportFormat, export_document, import_from_file, import_from_str};
 use crate::core::markdown::serialize_markdown;
 use crate::core::model::{
@@ -35,6 +35,7 @@ enum ActivePanel {
     GlobalPaperQueue,
     Reflect,
     ImportExport,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +149,11 @@ struct FolioApp {
     import_paste_input: String,
     import_format: ImportFormat,
 
+    // Settings inputs
+    settings_vault_input: String,
+    settings_page_input: String,
+    settings_spaces_input: String,
+
     // Status banner
     status_msg: Option<String>,
 }
@@ -254,6 +260,16 @@ enum Message {
     DeleteSpace(String),
     SearchChanged(String),
     ClearSearch,
+
+    // Settings
+    SettingsVaultChanged(String),
+    SettingsBrowseVault,
+    SettingsOpenVaultFolder,
+    SettingsOpenConfigDir,
+    SettingsPageChanged(String),
+    SettingsSpacesChanged(String),
+    SaveSettings,
+    ResetSettingsDefaults,
 }
 
 pub fn run_native_gui(vault: Vault, config: FolioConfig) -> Result<()> {
@@ -305,6 +321,9 @@ impl FolioApp {
         let persian_font = config.persian_font.clone();
         let (has_vazirmatn, has_dastkhat) = detect_installed_persian_fonts();
         let is_dark = config.gui_theme != "light";
+        let settings_vault_input = vault.root.to_string_lossy().to_string();
+        let settings_page_input = config.notebook_page.to_string();
+        let settings_spaces_input = config.default_spaces.join(", ");
 
         Self {
             vault,
@@ -343,6 +362,9 @@ impl FolioApp {
             import_path_input: String::new(),
             import_paste_input: String::new(),
             import_format: ImportFormat::Auto,
+            settings_vault_input,
+            settings_page_input,
+            settings_spaces_input,
             status_msg: None,
         }
     }
@@ -535,6 +557,9 @@ impl FolioApp {
                     Key::Character("m") if cmd => {
                         return self.update(Message::TogglePanel(ActivePanel::MigrationTriage));
                     }
+                    Key::Character(",") if cmd => {
+                        return self.update(Message::TogglePanel(ActivePanel::Settings));
+                    }
                     _ => {}
                 }
             }
@@ -592,6 +617,11 @@ impl FolioApp {
                 self.active_panel = if self.active_panel == panel {
                     ActivePanel::None
                 } else {
+                    if panel == ActivePanel::Settings {
+                        self.settings_vault_input = self.vault.root.to_string_lossy().to_string();
+                        self.settings_page_input = self.config.notebook_page.to_string();
+                        self.settings_spaces_input = self.config.default_spaces.join(", ");
+                    }
                     self.refresh_metadata();
                     panel
                 };
@@ -1092,6 +1122,136 @@ impl FolioApp {
                 self.search_query.clear();
                 self.search_hits.clear();
             }
+            Message::SettingsVaultChanged(val) => {
+                self.settings_vault_input = val;
+            }
+            Message::SettingsBrowseVault => {
+                if let Some(chosen) = pick_folder_dialog(&self.vault.root) {
+                    self.settings_vault_input = chosen.to_string_lossy().to_string();
+                } else {
+                    self.status_msg = Some(
+                        self.tr(
+                            "Folder picker cancelled or unavailable — enter path directly.",
+                            "انتخابگر پوشه لغو شد — مسیر را مستقیماً وارد کنید.",
+                        )
+                        .to_string(),
+                    );
+                }
+            }
+            Message::SettingsOpenVaultFolder => {
+                if let Err(e) = open::that(&self.vault.root) {
+                    self.status_msg = Some(format!("Could not open vault folder: {e}"));
+                }
+            }
+            Message::SettingsOpenConfigDir => {
+                let cfg_path = FolioConfig::config_path();
+                let dir = cfg_path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or(cfg_path);
+                let _ = fs::create_dir_all(&dir);
+                if let Err(e) = open::that(&dir) {
+                    self.status_msg = Some(format!("Could not open config folder: {e}"));
+                }
+            }
+            Message::SettingsPageChanged(val) => {
+                self.settings_page_input = val;
+            }
+            Message::SettingsSpacesChanged(val) => {
+                self.settings_spaces_input = val;
+            }
+            Message::SaveSettings => {
+                let raw_vault = self.settings_vault_input.trim();
+                if raw_vault.is_empty() {
+                    self.status_msg = Some(
+                        self.tr(
+                            "Vault folder path cannot be empty.",
+                            "مسیر پوشه بایگانی نمی‌تواند خالی باشد.",
+                        )
+                        .to_string(),
+                    );
+                } else {
+                    let parsed_page = self
+                        .settings_page_input
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|&p| p > 0)
+                        .unwrap_or(self.config.notebook_page.max(1));
+
+                    let parsed_spaces: Vec<String> = self
+                        .settings_spaces_input
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    let next_spaces = if parsed_spaces.is_empty() {
+                        FolioConfig::default().default_spaces
+                    } else {
+                        parsed_spaces
+                    };
+
+                    let expanded_vault = expand_tilde(PathBuf::from(raw_vault));
+                    let vault_changed = expanded_vault != self.vault.root;
+
+                    match Vault::open_or_init(expanded_vault.clone(), &next_spaces) {
+                        Ok(new_vault) => {
+                            self.config.vault_path = expanded_vault;
+                            self.config.notebook_page = parsed_page;
+                            self.config.default_spaces = next_spaces;
+                            self.persist_config();
+
+                            self.vault = new_vault;
+                            self.settings_vault_input =
+                                self.vault.root.to_string_lossy().to_string();
+                            self.settings_page_input = self.config.notebook_page.to_string();
+                            self.settings_spaces_input = self.config.default_spaces.join(", ");
+
+                            if vault_changed {
+                                let today = Vault::today_date();
+                                if let Ok(daily) = self
+                                    .vault
+                                    .open_or_create_daily(today, self.config.notebook_page)
+                                {
+                                    self.doc = daily;
+                                    self.editing_entry_id = None;
+                                    self.migrating_entry_id = None;
+                                    self.tag_filter = None;
+                                    self.search_query.clear();
+                                    self.search_hits.clear();
+                                }
+                            }
+                            self.refresh_metadata();
+                            self.status_msg = Some(if vault_changed {
+                                format!(
+                                    "{} {}",
+                                    self.tr("Settings saved. Switched vault to", "تنظیمات ذخیره شد. بایگانی فعال:"),
+                                    self.vault.display_root()
+                                )
+                            } else {
+                                self.tr(
+                                    "Settings saved to config.toml.",
+                                    "تنظیمات در config.toml ذخیره شد.",
+                                )
+                                .to_string()
+                            });
+                        }
+                        Err(e) => {
+                            self.status_msg = Some(format!("Failed to open vault folder: {e}"));
+                        }
+                    }
+                }
+            }
+            Message::ResetSettingsDefaults => {
+                let def = FolioConfig::default();
+                self.settings_vault_input = def.vault_path.to_string_lossy().to_string();
+                self.settings_page_input = def.notebook_page.to_string();
+                self.settings_spaces_input = def.default_spaces.join(", ");
+                self.rtl_mode = def.rtl_mode;
+                self.is_dark = def.gui_theme != "light";
+                self.persian_font = def.persian_font;
+                return self.update(Message::SaveSettings);
+            }
         }
 
         Task::none()
@@ -1163,6 +1323,9 @@ impl FolioApp {
             }
             ActivePanel::ImportExport => {
                 root_col = root_col.push(self.view_import_export_panel(p, ui_rtl, ui_font));
+            }
+            ActivePanel::Settings => {
+                root_col = root_col.push(self.view_settings_panel(p, ui_rtl, ui_font));
             }
             ActivePanel::None => {}
         }
@@ -1425,6 +1588,13 @@ impl FolioApp {
                 p,
                 ui_font,
                 Message::TogglePanel(ActivePanel::ImportExport),
+            ),
+            pill_button(
+                self.tr("Settings", "تنظیمات"),
+                self.active_panel == ActivePanel::Settings,
+                p,
+                ui_font,
+                Message::TogglePanel(ActivePanel::Settings),
             ),
         ]
         .spacing(3);
@@ -2080,6 +2250,295 @@ impl FolioApp {
         };
 
         container(column![head, fmt_row, file_row, paste_row].spacing(6))
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| pane_style(p.surface_low, p.primary))
+            .into()
+    }
+
+    fn view_settings_panel(
+        &self,
+        p: Palette,
+        ui_rtl: bool,
+        ui_font: Font,
+    ) -> Element<'_, Message> {
+        let title = text(self.tr(
+            "Settings — Vault, Notebook & Preferences (⌘,)",
+            "تنظیمات — پوشه بایگانی، دفترچه و ترجیحات (⌘,)",
+        ))
+        .size(12)
+        .color(p.primary)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let close_btn = pill_button(
+            self.tr("Close", "بستن"),
+            false,
+            p,
+            ui_font,
+            Message::ClosePanels,
+        );
+
+        let head = if ui_rtl {
+            row![close_btn, Space::new().width(Length::Fill), title].align_y(Alignment::Center)
+        } else {
+            row![title, Space::new().width(Length::Fill), close_btn].align_y(Alignment::Center)
+        };
+
+        // 1. Vault Folder row
+        let vault_label = text(self.tr("Vault Folder:", "پوشه بایگانی:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let vault_input = text_input(
+            self.tr("~/Obsidian/BuJo-Vault", "~/Obsidian/BuJo-Vault"),
+            &self.settings_vault_input,
+        )
+        .on_input(Message::SettingsVaultChanged)
+        .on_submit(Message::SaveSettings)
+        .size(12)
+        .font(Font::DEFAULT)
+        .padding([5, 8])
+        .width(Length::Fill)
+        .style(move |_, status| input_style(p, status));
+
+        let browse_btn = pill_button(
+            self.tr("Browse...", "انتخاب پوشه..."),
+            false,
+            p,
+            ui_font,
+            Message::SettingsBrowseVault,
+        );
+        let open_vault_btn = pill_button(
+            self.tr("Open Folder", "باز کردن"),
+            false,
+            p,
+            ui_font,
+            Message::SettingsOpenVaultFolder,
+        );
+
+        let vault_row = if ui_rtl {
+            row![open_vault_btn, browse_btn, vault_input, vault_label]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![vault_label, vault_input, browse_btn, open_vault_btn]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
+
+        // 2. Default Notebook Page & Default Spaces row
+        let page_label = text(self.tr("Default Page:", "صفحه پیش‌فرض:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let page_input = text_input("1", &self.settings_page_input)
+            .on_input(Message::SettingsPageChanged)
+            .on_submit(Message::SaveSettings)
+            .size(12)
+            .font(Font::DEFAULT)
+            .padding([5, 8])
+            .width(Length::Fixed(72.0))
+            .style(move |_, status| input_style(p, status));
+
+        let spaces_label = text(self.tr("Default Spaces:", "فضاهای پیش‌فرض:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let spaces_input = text_input(
+            "Studio & Work, Reading & Study, Personal",
+            &self.settings_spaces_input,
+        )
+        .on_input(Message::SettingsSpacesChanged)
+        .on_submit(Message::SaveSettings)
+        .size(12)
+        .font(ui_font)
+        .padding([5, 8])
+        .width(Length::Fill)
+        .style(move |_, status| input_style(p, status));
+
+        let meta_row = if ui_rtl {
+            row![spaces_input, spaces_label, page_input, page_label]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        } else {
+            row![page_label, page_input, spaces_label, spaces_input]
+                .spacing(6)
+                .align_y(Alignment::Center)
+        };
+
+        // 3. Appearance, Direction & Persian Font row
+        let theme_label = text(self.tr("Theme:", "پوسته:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let dark_btn = pill_button(
+            self.tr("Dark", "تیره"),
+            self.is_dark,
+            p,
+            ui_font,
+            if self.is_dark {
+                Message::TogglePanel(ActivePanel::Settings)
+            } else {
+                Message::ToggleTheme
+            },
+        );
+        let light_btn = pill_button(
+            self.tr("Light", "روشن"),
+            !self.is_dark,
+            p,
+            ui_font,
+            if !self.is_dark {
+                Message::TogglePanel(ActivePanel::Settings)
+            } else {
+                Message::ToggleTheme
+            },
+        );
+        let dark_btn = if self.is_dark {
+            container(
+                text(self.tr("Dark", "تیره"))
+                    .size(11)
+                    .color(p.on_primary)
+                    .font(ui_font)
+                    .shaping(text::Shaping::Advanced),
+            )
+            .padding([4, 9])
+            .style(move |_| container::Style {
+                background: Some(p.primary.into()),
+                border: Border {
+                    color: p.primary,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+        } else {
+            dark_btn
+        };
+        let light_btn = if !self.is_dark {
+            container(
+                text(self.tr("Light", "روشن"))
+                    .size(11)
+                    .color(p.on_primary)
+                    .font(ui_font)
+                    .shaping(text::Shaping::Advanced),
+            )
+            .padding([4, 9])
+            .style(move |_| container::Style {
+                background: Some(p.primary.into()),
+                border: Border {
+                    color: p.primary,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+        } else {
+            light_btn
+        };
+
+        let dir_label = text(self.tr("Direction:", "جهت:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let font_label = text(self.tr("Persian Font:", "فونت فارسی:"))
+            .size(11)
+            .color(p.on_surface_variant)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let font_btn = pill_button(
+            self.persian_font_label(),
+            false,
+            p,
+            ui_font,
+            Message::TogglePersianFont,
+        );
+
+        let prefs_row = row![
+            theme_label,
+            dark_btn,
+            light_btn,
+            Space::new().width(Length::Fixed(10.0)),
+            dir_label,
+            self.rtl_pill(p, ui_font, RtlMode::Ltr),
+            self.rtl_pill(p, ui_font, RtlMode::Auto),
+            self.rtl_pill(p, ui_font, RtlMode::Rtl),
+            Space::new().width(Length::Fixed(10.0)),
+            font_label,
+            font_btn,
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+
+        // 4. Config path + Save / Reset actions row
+        let cfg_display = FolioConfig::config_path().to_string_lossy().to_string();
+        let cfg_info = text(format!(
+            "{} {cfg_display}",
+            self.tr("Config file:", "فایل تنظیمات:")
+        ))
+        .size(10)
+        .color(p.on_surface_variant)
+        .font(ui_font)
+        .shaping(text::Shaping::Advanced);
+
+        let open_cfg_btn = pill_button(
+            self.tr("Open Config Dir", "پوشه تنظیمات"),
+            false,
+            p,
+            ui_font,
+            Message::SettingsOpenConfigDir,
+        );
+        let reset_btn = pill_button(
+            self.tr("Reset Defaults", "بازنشانی"),
+            false,
+            p,
+            ui_font,
+            Message::ResetSettingsDefaults,
+        );
+        let save_btn = pill_button(
+            self.tr("Save & Apply", "ذخیره و اعمال"),
+            true,
+            p,
+            ui_font,
+            Message::SaveSettings,
+        );
+
+        let actions_row = if ui_rtl {
+            row![
+                save_btn,
+                reset_btn,
+                open_cfg_btn,
+                Space::new().width(Length::Fill),
+                cfg_info,
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+        } else {
+            row![
+                cfg_info,
+                Space::new().width(Length::Fill),
+                open_cfg_btn,
+                reset_btn,
+                save_btn,
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+        };
+
+        container(column![head, vault_row, meta_row, prefs_row, actions_row].spacing(8))
             .width(Length::Fill)
             .padding(10)
             .style(move |_| pane_style(p.surface_low, p.primary))
@@ -3441,6 +3900,82 @@ fn scan_font_dir(dir: &Path, depth: usize, has_vazir: &mut bool, has_dastkhat: &
                     *has_dastkhat = true;
                 }
             }
+        }
+    }
+}
+
+/// Open a native OS directory chooser dialog without pulling in extra native crates.
+fn pick_folder_dialog(initial: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let start = initial.to_string_lossy().replace('"', "\\\"");
+        let script = format!(
+            "try\nPOSIX path of (choose folder with prompt \"Choose Folio Vault Folder\" default location POSIX file \"{start}\")\non error\nPOSIX path of (choose folder with prompt \"Choose Folio Vault Folder\")\nend try"
+        );
+        let out = Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if chosen.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(chosen.trim_end_matches('/')))
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let start = initial.to_string_lossy().replace('\'', "''");
+        let ps = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose Folio Vault Folder'; if (Test-Path '{start}') {{ $d.SelectedPath = '{start}' }}; if ($d.ShowDialog() -eq 'OK') {{ Write-Output $d.SelectedPath }}"
+        );
+        let out = Command::new("pwsh")
+            .args(["-NoProfile", "-STA", "-Command", &ps])
+            .output()
+            .or_else(|_| {
+                Command::new("powershell")
+                    .args(["-NoProfile", "-STA", "-Command", &ps])
+                    .output()
+            })
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if chosen.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(chosen))
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let start = initial.to_string_lossy().to_string();
+        let out = Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--directory",
+                "--title=Choose Folio Vault Folder",
+                &format!("--filename={start}/"),
+            ])
+            .output()
+            .or_else(|_| {
+                Command::new("kdialog")
+                    .args(["--getexistingdirectory", &start])
+                    .output()
+            })
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if chosen.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(chosen))
         }
     }
 }

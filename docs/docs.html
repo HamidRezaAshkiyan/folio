@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const saved = localStorage.getItem('folio-site-theme');
+      const scheme = saved === 'light' ? 'light' : (saved === 'dark' ? 'dark' : 'dark');
+      document.querySelector('meta[name="color-scheme"]').content = saved || 'light dark';
+      document.documentElement.classList.toggle('light', scheme === 'light');
+      document.documentElement.classList.toggle('dark', scheme !== 'light');
+    } catch {}
+  </script>
+  <title>Documentation — Why Folio Exists &amp; How to Use It</title>
+  <meta name="description" content="Documentation for Folio: why it exists, its paper-first philosophy, installation, configuration, Settings page, TUI/GUI/CLI usage, and Obsidian Markdown format.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2315130E' stroke='%23B1C7F1' stroke-width='3'/%3E%3Ccircle cx='22' cy='22' r='4.5' fill='%23B1C7F1'/%3E%3Cline x1='32' y1='22' x2='48' y2='22' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='34' r='4.5' fill='none' stroke='%23E5C281' stroke-width='3'/%3E%3Cline x1='32' y1='34' x2='44' y2='34' stroke='%23E8E2D9' stroke-width='3.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='44' x2='26' y2='44' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='18' y1='49' x2='26' y2='49' stroke='%23FFB4A8' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='32' y1='46.5' x2='46' y2='46.5' stroke='%23C4C6CF' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --primary: #B1C7F1;
+      --on-primary: #1A3152;
+      --secondary: #FFB4A8;
+      --tertiary: #E5C281;
+      --surface: #15130E;
+      --surface-lowest: #100E09;
+      --surface-low: #1E1B16;
+      --surface-container: #221F1A;
+      --surface-high: #2C2A24;
+      --on-surface: #E8E2D9;
+      --on-surface-variant: #C4C6CF;
+      --outline-variant: #44474E;
+      --glow-primary: rgba(177, 199, 241, 0.08);
+      --glow-tertiary: rgba(229, 194, 129, 0.06);
+      --mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    }
+
+    :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+      color-scheme: dark;
+    }
+    :root:has(> head > meta[name="color-scheme"][content="light"]) {
+      color-scheme: light;
+    }
+
+    html.light {
+      --primary: #0A2344;
+      --on-primary: #FFFFFF;
+      --secondary: #A03F32;
+      --tertiary: #7A5400;
+      --surface: #FFF8F0;
+      --surface-lowest: #FFFFFF;
+      --surface-low: #F9F3EA;
+      --surface-container: #F4EDE4;
+      --surface-high: #EEE7DE;
+      --on-surface: #1E1B16;
+      --on-surface-variant: #52555E;
+      --outline-variant: #D0C9BE;
+      --glow-primary: rgba(10, 35, 68, 0.05);
+      --glow-tertiary: rgba(122, 84, 0, 0.05);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background-color: var(--surface);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, var(--glow-primary), transparent 65%),
+        radial-gradient(ellipse 60% 40% at 85% 20%, var(--glow-tertiary), transparent 60%);
+      color: var(--on-surface);
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.7;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+
+    /* Sticky Top Navigation */
+    .nav-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--surface) 84%, transparent);
+      border-bottom: 1px solid var(--outline-variant);
+    }
+
+    nav.topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      height: 58px;
+    }
+
+    .brand-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--on-surface);
+      font-weight: 700;
+      font-size: 14px;
+      text-decoration: none !important;
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: var(--surface-lowest);
+      border: 1px solid var(--primary);
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 12.5px;
+    }
+
+    .nav-links a {
+      color: var(--on-surface-variant);
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover, .nav-links a[aria-current="page"] {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .nav-actions { display: flex; align-items: center; gap: 8px; }
+
+    @media (max-width: 680px) {
+      .nav-links { gap: 12px; font-size: 11.5px; }
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--outline-variant);
+      background: var(--surface-low);
+      color: var(--on-surface);
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      text-decoration: none !important;
+    }
+    .btn:hover { background: var(--surface-high); border-color: var(--primary); }
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+    .btn-primary:hover { opacity: 0.92; }
+
+    /* Page Header */
+    header.page-hero {
+      padding: 56px 0 36px;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 55%, transparent);
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tertiary);
+      margin-bottom: 10px;
+    }
+
+    header.page-hero h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(32px, 5vw, 48px);
+      line-height: 1.12;
+      letter-spacing: -0.02em;
+      margin-bottom: 14px;
+    }
+
+    header.page-hero h1 em { font-style: italic; color: var(--primary); }
+
+    .lead {
+      color: var(--on-surface-variant);
+      max-width: 700px;
+      font-size: 14px;
+    }
+
+    .toc-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .toc-pill {
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+    }
+    .toc-pill:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    /* Sections */
+    main section {
+      padding: 44px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 45%, transparent);
+    }
+    main section:last-of-type { border-bottom: none; }
+
+    .sec-kicker {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tertiary);
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(24px, 3.5vw, 32px);
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--on-surface);
+      margin-bottom: 6px;
+    }
+
+    p { color: var(--on-surface-variant); margin-bottom: 14px; }
+    p strong { color: var(--on-surface); }
+
+    ul.clean-list {
+      margin: 0 0 16px 20px;
+      color: var(--on-surface-variant);
+    }
+    ul.clean-list li { margin-bottom: 6px; }
+    ul.clean-list li strong { color: var(--on-surface); }
+
+    code {
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 12px;
+      color: var(--on-surface);
+    }
+
+    .pane {
+      background: var(--surface-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    @media (max-width: 760px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
+
+    .code-block {
+      background: var(--surface-lowest);
+      border: 1px solid var(--outline-variant);
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin: 12px 0;
+      overflow-x: auto;
+    }
+
+    .code-block pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--on-surface);
+    }
+
+    .code-block .comment { color: var(--on-surface-variant); }
+
+    table.doc-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      margin-top: 12px;
+    }
+
+    table.doc-table th, table.doc-table td {
+      text-align: left;
+      padding: 9px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 55%, transparent);
+      vertical-align: top;
+    }
+
+    table.doc-table th {
+      color: var(--primary);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    table.doc-table tr:last-child td { border-bottom: none; }
+
+    .kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--surface-container);
+      border: 1px solid var(--outline-variant);
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .callout {
+      border-inline-start: 3px solid var(--primary);
+      background: var(--surface-container);
+      padding: 12px 16px;
+      border-radius: 0 6px 6px 0;
+      margin-top: 16px;
+      font-size: 12.5px;
+      color: var(--on-surface);
+    }
+
+    footer {
+      border-top: 1px solid var(--outline-variant);
+      padding: 28px 0 40px;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .footer-links { display: flex; flex-wrap: wrap; gap: 16px; }
+  </style>
+</head>
+<body>
+  <div class="nav-wrap">
+    <div class="container">
+      <nav class="topbar" aria-label="Primary">
+        <a href="index.html" class="brand-link">
+          <span class="brand-mark">.</span>
+          <span>folio</span>
+        </a>
+        <div class="nav-links">
+          <a href="index.html">Home</a>
+          <a href="guide.html">BuJo Guide</a>
+          <a href="docs.html" aria-current="page">Docs</a>
+        </div>
+        <div class="nav-actions">
+          <button id="theme-toggle" class="btn" type="button" aria-label="Toggle color theme">☀ Light</button>
+          <a class="btn btn-primary" href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">GitHub ↗</a>
+        </div>
+      </nav>
+    </div>
+  </div>
+
+  <header class="page-hero">
+    <div class="container">
+      <div class="eyebrow">Documentation</div>
+      <h1>Why <em>Folio</em> exists &amp; how to use it.</h1>
+      <p class="lead">
+        Folio was built for people who love the calm focus of a physical Bullet Journal, yet spend much of their day in front of a keyboard. Here is the philosophy behind Folio and a practical guide to getting started.
+      </p>
+      <div class="toc-strip" aria-label="On this page">
+        <a class="toc-pill" href="#why">1. Why Folio Exists</a>
+        <a class="toc-pill" href="#interfaces">2. Interfaces</a>
+        <a class="toc-pill" href="#settings">3. Settings &amp; Vault</a>
+        <a class="toc-pill" href="#workflow">4. Daily Workflow</a>
+        <a class="toc-pill" href="#cli">5. CLI &amp; I/O</a>
+        <a class="toc-pill" href="#format">6. Markdown Format</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 1. Why Folio Exists -->
+    <section id="why">
+      <div class="sec-kicker">01 · Motivation</div>
+      <h2>Why Folio Exists</h2>
+      <p>
+        Paper notebooks are extraordinary for thinking clearly: no notifications, no infinite backlogs, and a tactile rhythm that slows your mind down. Yet real life is messy — sometimes your notebook is in your backpack, you're mid-command in a terminal, or you want to search across six months of notes in a second.
+      </p>
+      <p>
+        Most digital task managers try to <strong>replace</strong> paper with complex databases, cloud subscriptions, and gamified streaks. Folio takes the opposite stance: it is a <strong>companion</strong> to your physical notebook, not a competitor.
+      </p>
+
+      <div class="grid-3">
+        <div class="pane">
+          <h3>Paper-First Companion</h3>
+          <p>Every entry tracks whether it has been transcribed to your physical spread (<code>[paper:no]</code> → <code>[paper:ok]</code>) and links to your real notebook page number (<code>p. 42</code>).</p>
+        </div>
+        <div class="pane">
+          <h3>Plain Markdown Forever</h3>
+          <p>No proprietary database, no cloud account. Your journal lives as clean <code>.md</code> files with YAML frontmatter and <code>[[wikilinks]]</code> — natively readable in Obsidian or any editor.</p>
+        </div>
+        <div class="pane">
+          <h3>Fast &amp; Bilingual</h3>
+          <p>A single lightweight Rust binary with a keyboard-driven TUI, a native Desktop GUI with full Persian/Arabic RTL support, an embedded Web GUI, and instant shell logging.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        New to the Bullet Journal method itself? Read the <a href="guide.html">minimal Bullet Journal Guide</a> first for a 3-minute overview of Rapid Logging, Signifiers, and Migration.
+      </div>
+    </section>
+
+    <!-- 2. Interfaces -->
+    <section id="interfaces">
+      <div class="sec-kicker">02 · One Binary, Four Ways to Work</div>
+      <h2>Choosing Your Interface</h2>
+      <p>
+        Every interface reads and writes the exact same Markdown vault on disk, so you can switch freely between them throughout the day.
+      </p>
+
+      <div class="grid-2">
+        <div class="pane">
+          <h3>Terminal UI — <code>folio --tui</code></h3>
+          <p>Default mode when running <code>folio</code>. A 6-pane Ratatui interface with Vim-inspired navigation (<code>j</code>/<code>k</code>, <code>i</code>, <code>/</code>, <code>:w</code>, <code>:q</code>) and mouse support.</p>
+        </div>
+        <div class="pane">
+          <h3>Native Desktop GUI — <code>folio --gui</code></h3>
+          <p>Built with Iced. Features Dark &amp; Light themes, live <code>LTR</code> / <code>AUTO</code> / <code>RTL</code> Persian mode, Migration Triage, Global Paper Queue, AM/PM Reflect, and an in-app Settings panel (<span class="kbd">⌘,</span>).</p>
+        </div>
+        <div class="pane">
+          <h3>Embedded Web GUI — <code>folio --web</code></h3>
+          <p>Starts a local HTTP server (default <code>127.0.0.1:3420</code>) and opens Folio in your browser — great for side-by-side browser workflows.</p>
+        </div>
+        <div class="pane">
+          <h3>CLI &amp; Obsidian Plugin</h3>
+          <p>Capture a thought in one second with <code>folio log ". Buy coffee beans"</code>, or open the same vault folder in Obsidian with the companion plugin.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Settings & Vault Configuration -->
+    <section id="settings">
+      <div class="sec-kicker">03 · Configuration</div>
+      <h2>Settings &amp; Vault Folder</h2>
+      <p>
+        By default, Folio stores your Markdown vault at <code>~/Obsidian/BuJo-Vault</code> and saves preferences to <code>~/.config/folio/config.toml</code> (or the platform config directory on macOS/Windows).
+      </p>
+
+      <h3>Changing Settings in the App</h3>
+      <ul class="clean-list">
+        <li><strong>Native GUI (<code>folio --gui</code>):</strong> Click <strong>Settings</strong> in the top bar or press <span class="kbd">⌘,</span> (<span class="kbd">Ctrl+,</span>). You can type or browse for a new <strong>Vault Folder</strong>, set the default notebook page, customize default Spaces, switch Dark/Light theme, and toggle LTR/AUTO/RTL direction &amp; Persian fonts.</li>
+        <li><strong>Web GUI (<code>folio --web</code>):</strong> Click <strong>Settings</strong> in the top bar to open the Settings dialog. Saving updates <code>config.toml</code> and immediately switches to the new vault folder.</li>
+      </ul>
+
+      <h3>Vault Path Resolution Order</h3>
+      <p>When Folio starts, it resolves your vault directory in this priority order:</p>
+      <div class="pane">
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Source</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1 (Highest)</td>
+              <td>CLI flag</td>
+              <td><code>folio --vault ~/Notes/MyBuJo --gui</code></td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Environment variable</td>
+              <td><code>FOLIO_VAULT=~/Notes/MyBuJo folio</code></td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Config file (<code>config.toml</code>)</td>
+              <td><code>vault_path = "/Users/you/Obsidian/BuJo-Vault"</code></td>
+            </tr>
+            <tr>
+              <td>4 (Default)</td>
+              <td>Built-in default</td>
+              <td><code>~/Obsidian/BuJo-Vault</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code-block">
+        <pre><span class="comment"># ~/.config/folio/config.toml</span>
+vault_path = "/Users/you/Obsidian/BuJo-Vault"
+notebook_page = 42
+default_spaces = ["Studio & Work", "Reading & Study", "Personal"]
+rtl_mode = "auto"        <span class="comment"># "auto" | "ltr" | "rtl"</span>
+gui_theme = "dark"       <span class="comment"># "dark" | "light"</span>
+persian_font = "vazirmatn" <span class="comment"># "vazirmatn" | "dastkhat"</span></pre>
+      </div>
+    </section>
+
+    <!-- 4. Daily Workflow -->
+    <section id="workflow">
+      <div class="sec-kicker">04 · Practice</div>
+      <h2>A Practical Daily Workflow</h2>
+
+      <div class="grid-2">
+        <div class="pane">
+          <h3>Morning — Set Intentions</h3>
+          <p>Launch <code>folio --gui</code> or <code>folio --tui</code>. Open <strong>Triage</strong> (<span class="kbd">⌘M</span>) to review unfinished actions from previous days: migrate what matters to today, schedule later items to the Future Log, or cancel stale ones.</p>
+        </div>
+        <div class="pane">
+          <h3>During the Day — Rapid Log</h3>
+          <p>Press <span class="kbd">⌘N</span> (GUI) or <span class="kbd">i</span> (TUI) and type with a prefix: <code>. </code> for Action, <code>o </code> for Event, <code>= </code> for Emotion, <code>- </code> for Note. Add <code>*</code> for Priority or <code>!</code> for Inspiration (e.g. <code>*. Ship v1.9</code>).</p>
+        </div>
+        <div class="pane">
+          <h3>Evening — Carry to Paper</h3>
+          <p>Open your physical notebook to your current spread, set the page number (<code>p. 42</code>), and transcribe entries marked <code>[paper:no]</code>. Press <span class="kbd">m</span> / <span class="kbd">M</span> (or click <code>[paper:no]</code>) to flip them to <code>[paper:ok]</code>.</p>
+        </div>
+        <div class="pane">
+          <h3>Weekly &amp; Monthly — Review</h3>
+          <p>Press <span class="kbd">w</span> or <span class="kbd">r</span> in the TUI (or click <strong>Weekly</strong> / <strong>M.Rev</strong> in the GUI, or run <code>folio review weekly</code>) to generate a structured Markdown review summary under <code>Reviews/</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. CLI & Import/Export -->
+    <section id="cli">
+      <div class="sec-kicker">05 · Command Line</div>
+      <h2>CLI Commands &amp; Import / Export</h2>
+      <div class="code-block">
+        <pre><span class="comment"># Rapid-log directly from any terminal</span>
+folio log ". Finalize studio lighting sketch"
+folio log "o Coffee with Maya at 09:30"
+folio log "= Calm and focused after morning walk"
+folio log -s "Reading &amp; Study" "- Finish A Pattern Language ch. 4"
+
+<span class="comment"># Search across Daily Notes, Spaces, Reviews, and #tags</span>
+folio search "#architecture"
+
+<span class="comment"># Refresh Master Index (Index.md) or open Monthly Log</span>
+folio index
+folio monthly
+
+<span class="comment"># Generate Weekly or Monthly Review</span>
+folio review weekly
+folio review monthly
+
+<span class="comment"># Import from Apple Notes, Obsidian, Notion, CSV, or JSON</span>
+folio import ~/Desktop/notes.md
+folio export --format json --output today.json</pre>
+      </div>
+    </section>
+
+    <!-- 6. Vault Layout & Markdown Format -->
+    <section id="format">
+      <div class="sec-kicker">06 · Data Ownership</div>
+      <h2>Vault Structure &amp; Markdown Format</h2>
+      <p>
+        Every file in your vault is plain UTF-8 Markdown. If you ever stop using Folio, your entire journal remains completely readable and searchable.
+      </p>
+      <div class="grid-2">
+        <div class="code-block" style="margin: 0;">
+          <pre>~/Obsidian/BuJo-Vault/
+├── Index.md
+├── Future Log.md
+├── Daily Notes/
+│   ├── 2026-11-25.md
+│   ├── 2026-11-monthly.md
+│   └── 2026-11-index.md
+├── Spaces/
+│   ├── studio-work.md
+│   ├── reading-study.md
+│   └── personal.md
+└── Reviews/
+    ├── 2026-W48.md
+    └── 2026-11-review.md</pre>
+        </div>
+        <div class="code-block" style="margin: 0;">
+          <pre>---
+date: 2026-11-25
+page: 42
+tags:
+  - bujo
+  - daily
+---
+*. [08:15] Finalize lighting sketch [paper:no]
+o [09:30] Coffee with [[Maya]] [paper:ok]
+= [10:45] Calm after walking [paper:no]
+!- [11:10] Small repairs build living spaces [paper:no]
+× [11:25] Order ink refill [paper:ok]</pre>
+        </div>
+      </div>
+
+      <div style="margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px;">
+        <a href="guide.html" class="btn btn-primary">← Read the Bullet Journal Guide</a>
+        <a href="index.html#install" class="btn">Install Folio</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <div>
+        <strong style="color: var(--on-surface);">Folio</strong> · Built in Rust · Released under the MIT License
+      </div>
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+        <a href="guide.html">BuJo Guide</a>
+        <a href="docs.html">Docs</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/HamidRezaAshkiyan/folio/releases" target="_blank" rel="noopener">Releases</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const htmlEl = document.documentElement;
+    const themeBtn = document.getElementById('theme-toggle');
+    const colorMeta = document.querySelector('meta[name="color-scheme"]');
+
+    function syncThemeUI() {
+      const isLight = htmlEl.classList.contains('light');
+      themeBtn.textContent = isLight ? '☾ Dark' : '☀ Light';
+    }
+    syncThemeUI();
+
+    themeBtn.addEventListener('click', () => {
+      const isLight = htmlEl.classList.toggle('light');
+      htmlEl.classList.toggle('dark', !isLight);
+      const scheme = isLight ? 'light' : 'dark';
+      colorMeta.content = scheme;
+      try { localStorage.setItem('folio-site-theme', scheme); } catch {}
+      syncThemeUI();
+    });
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'folio-site-theme' && (e.newValue === 'light' || e.newValue === 'dark')) {
+        htmlEl.classList.toggle('light', e.newValue === 'light');
+        htmlEl.classList.toggle('dark', e.newValue !== 'light');
+        colorMeta.content = e.newValue;
+        syncThemeUI();
+      }
+    });
+  </script>
+</body>
+</html>
