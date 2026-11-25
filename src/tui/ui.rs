@@ -48,6 +48,27 @@ pub fn render(f: &mut Frame, app: &mut App) {
             selected,
             ..
         } => render_migrate_modal(f, area, entry_preview, targets, *selected),
+        ModalState::Reflect {
+            am_buf,
+            pm_buf,
+            active_field,
+            open_triage_count,
+            global_paper_count,
+        } => render_reflect_modal(
+            f,
+            area,
+            am_buf,
+            pm_buf,
+            *active_field,
+            *open_triage_count,
+            *global_paper_count,
+        ),
+        ModalState::Triage { items, selected } => render_triage_modal(f, area, items, *selected),
+        ModalState::GlobalPaper { items, selected } => {
+            render_global_paper_modal(f, area, items, *selected)
+        }
+        ModalState::RenameSpace { name_buf, .. } => render_rename_space_modal(f, area, name_buf),
+        ModalState::DeleteSpaceConfirm { name, .. } => render_delete_space_modal(f, area, name),
     }
 }
 
@@ -116,11 +137,7 @@ fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     ]);
     f.render_widget(Paragraph::new(left), cols[0]);
 
-    let page_label = app
-        .doc
-        .page
-        .map(|p| format!("Notebook p. {p}"))
-        .unwrap_or_else(|| "Notebook p. —".to_string());
+    let page_label = format!("Notebook {}", app.doc.format_pages());
     let sync_badge = if app.dirty {
         "[DIRTY .md]"
     } else {
@@ -310,22 +327,42 @@ fn render_rapid_log_pane(f: &mut Frame, app: &mut App, area: Rect) {
     app.ui_rects.entries_inner = rows[0];
     app.ui_rects.prompt_box = rows[1];
 
-    // Entry rows with auto-scrolling ListState
-    let width = rows[0].width as usize;
-    let filtered = app.filtered_entries();
-    if filtered.is_empty() && !app.doc.prose_lines.is_empty() {
+    // Entry rows with auto-scrolling ListState (and prose header if both prose & entries exist)
+    let has_prose = app.doc.prose_lines.iter().any(|l| !l.trim().is_empty());
+    let has_filtered = !app.filtered_entries().is_empty();
+
+    if !has_filtered && has_prose {
         let prose_text = app.doc.prose_lines.join("\n");
         let para = Paragraph::new(prose_text)
             .style(Style::default().fg(theme::ON_SURFACE))
             .wrap(Wrap { trim: false });
         f.render_widget(para, rows[0]);
-    } else if filtered.is_empty() {
+    } else if !has_filtered {
         let empty = Paragraph::new(Line::from(Span::styled(
             "  No entries yet. Press Ctrl+N or [i] to rapid log (.  o  =  -  *.  !-)",
             Style::default().fg(theme::ON_SURFACE_VARIANT),
         )));
         f.render_widget(empty, rows[0]);
     } else {
+        let list_area = if has_prose && rows[0].height >= 10 {
+            let prose_h = (app.doc.prose_lines.len() as u16 + 1).clamp(3, rows[0].height / 3);
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(prose_h), Constraint::Min(4)])
+                .split(rows[0]);
+            let prose_text = app.doc.prose_lines.join("\n");
+            let prose_box = Paragraph::new(prose_text)
+                .style(Style::default().fg(theme::ON_SURFACE_VARIANT))
+                .wrap(Wrap { trim: false });
+            f.render_widget(prose_box, split[0]);
+            app.ui_rects.entries_inner = split[1];
+            split[1]
+        } else {
+            rows[0]
+        };
+
+        let width = list_area.width as usize;
+        let filtered = app.filtered_entries();
         let items: Vec<ListItem> = filtered
             .iter()
             .enumerate()
@@ -365,8 +402,11 @@ fn render_rapid_log_pane(f: &mut Frame, app: &mut App, area: Rect) {
                     text_style = text_style.fg(theme::ON_SURFACE);
                 }
 
-                // " HH:MM * .  <text> [paper:no] "
-                let prefix_len = 1 + entry.time.len() + 2 + 2 + 2;
+                let indent_spaces = (entry.indent.min(3) as usize) * 2;
+                let indent_str = " ".repeat(indent_spaces);
+
+                // " HH:MM <indent>* .  <text> [paper:no] "
+                let prefix_len = 1 + entry.time.len() + 1 + indent_spaces + 1 + 3;
                 let suffix_len = paper_label.len() + 1;
                 let max_text = width.saturating_sub(prefix_len + suffix_len + 1);
                 let display_text = truncate_str(&entry.text, max_text);
@@ -378,6 +418,7 @@ fn render_rapid_log_pane(f: &mut Frame, app: &mut App, area: Rect) {
                         format!(" {} ", entry.time),
                         Style::default().fg(theme::ON_SURFACE_VARIANT).bg(row_bg),
                     ),
+                    Span::styled(indent_str, Style::default().bg(row_bg)),
                     Span::styled(
                         mod_str,
                         Style::default()
@@ -402,7 +443,7 @@ fn render_rapid_log_pane(f: &mut Frame, app: &mut App, area: Rect) {
             })
             .collect();
 
-        f.render_stateful_widget(List::new(items), rows[0], &mut app.entry_list_state);
+        f.render_stateful_widget(List::new(items), list_area, &mut app.entry_list_state);
     }
 
     // Live TUI Rapid Capture Prompt
@@ -614,11 +655,11 @@ fn render_bottom_bar(f: &mut Frame, app: &App, area: Rect) {
             vec![
                 key_span(" ^N", " Log  "),
                 key_span("/", " Search  "),
-                key_span("[/]", " Day  "),
-                key_span("Space", " ./×  "),
-                key_span("*!", " Mod  "),
-                key_span(">", " Migrate  "),
-                key_span("m", " Paper  "),
+                key_span("I", " Index  "),
+                key_span("L", " Monthly  "),
+                key_span("R", " Reflect  "),
+                key_span("T", " Triage  "),
+                key_span("c", " Cycle  "),
                 key_span("?", " Help"),
             ]
             .into_iter()
@@ -807,8 +848,376 @@ fn render_migrate_modal(
     f.render_widget(List::new(items), rows[1]);
 }
 
+fn render_reflect_modal(
+    f: &mut Frame,
+    area: Rect,
+    am_buf: &str,
+    pm_buf: &str,
+    active_field: usize,
+    open_triage_count: usize,
+    global_paper_count: usize,
+) {
+    let popup = centered_rect(66, 46, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            " AM / PM Reflection — BuJo Daily Ritual (Tab switch, Enter log, Esc close) ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(2),
+        ])
+        .split(inner);
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " AM Focus (logs as priority `*. ` action in Today):",
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rows[0],
+    );
+
+    let am_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if active_field == 0 {
+            theme::PRIMARY
+        } else {
+            theme::OUTLINE_VARIANT
+        }))
+        .style(Style::default().bg(theme::SURFACE_LOWEST));
+    let am_inner = am_block.inner(rows[1]);
+    f.render_widget(am_block, rows[1]);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            if am_buf.is_empty() && active_field != 0 {
+                " What matters most today?"
+            } else {
+                am_buf
+            },
+            Style::default().fg(if am_buf.is_empty() && active_field != 0 {
+                theme::ON_SURFACE_VARIANT
+            } else {
+                theme::ON_SURFACE
+            }),
+        ))),
+        am_inner,
+    );
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " PM Reflection (logs as `= ` emotion in Today):",
+            Style::default()
+                .fg(theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rows[2],
+    );
+
+    let pm_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if active_field == 1 {
+            theme::PRIMARY
+        } else {
+            theme::OUTLINE_VARIANT
+        }))
+        .style(Style::default().bg(theme::SURFACE_LOWEST));
+    let pm_inner = pm_block.inner(rows[3]);
+    f.render_widget(pm_block, rows[3]);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            if pm_buf.is_empty() && active_field != 1 {
+                " How did today feel or what stood out?"
+            } else {
+                pm_buf
+            },
+            Style::default().fg(if pm_buf.is_empty() && active_field != 1 {
+                theme::ON_SURFACE_VARIANT
+            } else {
+                theme::ON_SURFACE
+            }),
+        ))),
+        pm_inner,
+    );
+
+    let summary = format!(
+        " Evening checklist: {open_triage_count} open past actions ([T] Triage) · {global_paper_count} pending paper ([P] Queue)"
+    );
+    f.render_widget(
+        Paragraph::new(summary).style(Style::default().fg(theme::ON_SURFACE_VARIANT)),
+        rows[4],
+    );
+
+    if active_field == 0 {
+        let cx = am_inner.x + am_buf.chars().count() as u16;
+        f.set_cursor_position((cx.min(am_inner.x + am_inner.width.saturating_sub(1)), am_inner.y));
+    } else {
+        let cx = pm_inner.x + pm_buf.chars().count() as u16;
+        f.set_cursor_position((cx.min(pm_inner.x + pm_inner.width.saturating_sub(1)), pm_inner.y));
+    }
+}
+
+fn render_triage_modal(
+    f: &mut Frame,
+    area: Rect,
+    items: &[crate::core::model::VaultEntryRef],
+    selected: usize,
+) {
+    let popup = centered_rect(72, 64, area);
+    f.render_widget(Clear, popup);
+
+    let title = format!(
+        " Batch Migration Triage — {} open past actions ",
+        items.len()
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::TERTIARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(theme::TERTIARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(1)])
+        .split(inner);
+
+    if items.is_empty() {
+        f.render_widget(
+            Paragraph::new("  All caught up! No open (.) actions left in past Daily or Monthly logs.")
+                .style(Style::default().fg(theme::ON_SURFACE_VARIANT)),
+            rows[0],
+        );
+    } else {
+        let max_text = (rows[0].width as usize).saturating_sub(24);
+        let list_items: Vec<ListItem> = items
+            .iter()
+            .enumerate()
+            .take(rows[0].height as usize)
+            .map(|(i, item)| {
+                let bg = if i == selected {
+                    theme::SURFACE_HIGH
+                } else {
+                    theme::SURFACE_LOW
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" [{}] ", truncate_str(&item.doc_title, 16)),
+                        Style::default().fg(theme::PRIMARY).bg(bg),
+                    ),
+                    Span::styled(
+                        truncate_str(&item.entry.text, max_text),
+                        Style::default().fg(theme::ON_SURFACE).bg(bg),
+                    ),
+                ]))
+            })
+            .collect();
+        f.render_widget(List::new(list_items), rows[0]);
+    }
+
+    let hint = Line::from(
+        vec![
+            key_span(" > / Enter", " Migrate Today  "),
+            key_span("<", " Future Log  "),
+            key_span("x / Space", " Done  "),
+            key_span("~", " Cancel  "),
+            key_span("Esc", " Close"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+    );
+    f.render_widget(Paragraph::new(hint), rows[1]);
+}
+
+fn render_global_paper_modal(
+    f: &mut Frame,
+    area: Rect,
+    items: &[crate::core::model::VaultEntryRef],
+    selected: usize,
+) {
+    let popup = centered_rect(72, 64, area);
+    f.render_widget(Clear, popup);
+
+    let title = format!(
+        " Global Carry-to-Paper Queue — {} pending across vault ",
+        items.len()
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::SECONDARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(1)])
+        .split(inner);
+
+    if items.is_empty() {
+        f.render_widget(
+            Paragraph::new("  Every entry in your vault is synced to paper ([paper:ok])!")
+                .style(Style::default().fg(theme::TERTIARY)),
+            rows[0],
+        );
+    } else {
+        let max_text = (rows[0].width as usize).saturating_sub(26);
+        let list_items: Vec<ListItem> = items
+            .iter()
+            .enumerate()
+            .take(rows[0].height as usize)
+            .map(|(i, item)| {
+                let bg = if i == selected {
+                    theme::SURFACE_HIGH
+                } else {
+                    theme::SURFACE_LOW
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" [{}] {} ", truncate_str(&item.doc_title, 16), item.entry.signifier.symbol()),
+                        Style::default().fg(theme::PRIMARY).bg(bg),
+                    ),
+                    Span::styled(
+                        truncate_str(&item.entry.text, max_text),
+                        Style::default().fg(theme::ON_SURFACE).bg(bg),
+                    ),
+                ]))
+            })
+            .collect();
+        f.render_widget(List::new(list_items), rows[0]);
+    }
+
+    let hint = Line::from(
+        vec![
+            key_span(" m / Enter", " Mark Copied  "),
+            key_span("M", " Sync Entire Vault  "),
+            key_span("Esc", " Close"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+    );
+    f.render_widget(Paragraph::new(hint), rows[1]);
+}
+
+fn render_rename_space_modal(f: &mut Frame, area: Rect, name_buf: &str) {
+    let popup = centered_rect(50, 22, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            " Rename Space (Enter to save, Esc to cancel) ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::OUTLINE_VARIANT))
+        .style(Style::default().bg(theme::SURFACE_LOWEST));
+    let input_inner = input_block.inner(inner);
+    f.render_widget(input_block, inner);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            name_buf,
+            Style::default().fg(theme::ON_SURFACE),
+        ))),
+        input_inner,
+    );
+    let cx = input_inner.x + name_buf.chars().count() as u16;
+    f.set_cursor_position((
+        cx.min(input_inner.x + input_inner.width.saturating_sub(1)),
+        input_inner.y,
+    ));
+}
+
+fn render_delete_space_modal(f: &mut Frame, area: Rect, name: &str) {
+    let popup = centered_rect(52, 22, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::SECONDARY))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .title(Line::from(Span::styled(
+            " Delete Space? ",
+            Style::default()
+                .fg(theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Delete space ", Style::default().fg(theme::ON_SURFACE)),
+            Span::styled(
+                format!("'{name}'"),
+                Style::default()
+                    .fg(theme::TERTIARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" permanently?", Style::default().fg(theme::ON_SURFACE)),
+        ]),
+        Line::from(""),
+        Line::from(
+            vec![
+                key_span(" [y / Enter]", " Delete   "),
+                key_span("[n / Esc]", " Cancel"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        ),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_help_modal(f: &mut Frame, area: Rect) {
-    let popup = centered_rect(66, 78, area);
+    let popup = centered_rect(72, 86, area);
     f.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -833,23 +1242,26 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  Ctrl+N / i      Focus rapid log prompt (prefix . o = - or *. !-)"),
-        Line::from("  Space           Toggle Action (.) <-> Completed (×)"),
+        Line::from("  Space / ~       Toggle Done (×) / Toggle Cancelled (~)"),
+        Line::from("  c               Cycle entry signifier (. -> o -> = -> -)"),
         Line::from("  * / !           Toggle Priority (*) / Inspiration (!) modifier"),
-        Line::from("  > / <           Smart Migrate Picker (>) / Quick Future Log (<)"),
-        Line::from("  m / M           Mark selected / all copied to paper [paper:ok]"),
+        Line::from("  } / {           Indent / Outdent nested sub-task (0..3)"),
+        Line::from("  > / <           Smart Migrate Picker (incl. Future months) / Future Log"),
+        Line::from("  m / M           Mark selected / all in doc carried to paper [paper:ok]"),
         Line::from("  e / d           Edit / Delete selected entry"),
         Line::from("  1..4 / # / 0    Filter signifier / cycle #tag filter / ALL"),
         Line::from(""),
         Line::from(Span::styled(
-            " Navigation, Search & Reviews",
+            " Bullet Journal Spreads, Rituals & Spaces",
             Style::default()
                 .fg(theme::TERTIARY)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from("  I / L           Master Index (Index.md) / Monthly Log (Calendar + Tasks)"),
+        Line::from("  R / T / P       AM/PM Reflection / Batch Triage / Global Paper Queue"),
         Line::from("  /  or  Ctrl+F   Instant Vault Search across all notes & #tags"),
         Line::from("  [ / ] / t       Previous Day / Next Day / Today"),
-        Line::from("  Tab / s / h     Cycle Spaces / Focus Spaces / Focus Vault"),
-        Line::from("  j / k / Mouse   Navigate & click panes, entries, or scroll"),
+        Line::from("  Tab / s / h     Cycle Spaces / Focus Spaces (r rename, d delete) / Vault"),
         Line::from("  w / r           Generate Weekly Review / Monthly Review"),
         Line::from(""),
         Line::from(Span::styled(
@@ -858,11 +1270,12 @@ fn render_help_modal(f: &mut Frame, area: Rect) {
                 .fg(theme::TERTIARY)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  :w / :q / :wq   Save .md / Quit"),
-        Line::from("  :space <name>   Create & open a custom Space"),
-        Line::from("  :page <num>     Set physical Notebook page number"),
-        Line::from("  :imp <path>     Import notes (md, obsidian, json, csv, txt)"),
-        Line::from("  :exp <fmt> <p>  Export current doc (md, json, csv)"),
+        Line::from("  :w / :q / :wq          Save .md / Quit"),
+        Line::from("  :index / :monthly-log  Refresh Master Index / Open Monthly Log"),
+        Line::from("  :reflect / :triage     Open AM/PM Reflection / Batch Triage"),
+        Line::from("  :space / :rename-space / :delete-space   Manage custom Spaces"),
+        Line::from("  :page <n> / :thread <n>                  Set / Thread notebook page"),
+        Line::from("  :imp <p> / :exp <fmt> <p>                Import / Export (md,json,csv)"),
         Line::from(""),
         Line::from(Span::styled(
             " Press Esc or ? to close",

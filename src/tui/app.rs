@@ -1,7 +1,8 @@
 use crate::core::io::{ExportFormat, ImportFormat, export_document, import_from_file};
 use crate::core::markdown::serialize_markdown;
 use crate::core::model::{
-    Document, Entry, EntryFilter, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultTree,
+    Document, Entry, EntryFilter, EntryModifier, SearchHit, Signifier, SpaceInfo, VaultEntryRef,
+    VaultTree,
 };
 use crate::core::review::{generate_monthly_review, generate_weekly_review};
 use crate::core::vault::Vault;
@@ -26,6 +27,7 @@ pub struct MigrateTarget {
     pub label: String,
     pub rel_path: String,
     pub scheduled: bool,
+    pub future_month: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,29 @@ pub enum ModalState {
         entry_preview: String,
         targets: Vec<MigrateTarget>,
         selected: usize,
+    },
+    Reflect {
+        am_buf: String,
+        pm_buf: String,
+        active_field: usize, // 0 = AM Focus, 1 = PM Reflection
+        open_triage_count: usize,
+        global_paper_count: usize,
+    },
+    Triage {
+        items: Vec<VaultEntryRef>,
+        selected: usize,
+    },
+    GlobalPaper {
+        items: Vec<VaultEntryRef>,
+        selected: usize,
+    },
+    RenameSpace {
+        rel_path: String,
+        name_buf: String,
+    },
+    DeleteSpaceConfirm {
+        rel_path: String,
+        name: String,
     },
 }
 
@@ -248,6 +273,81 @@ impl App {
         }
     }
 
+    pub fn open_master_index(&mut self) {
+        if self.dirty {
+            self.save_current();
+        }
+        match self.vault.update_master_index() {
+            Ok(_) => {
+                self.open_rel_path("Index.md");
+                self.status_msg = Some("Refreshed & opened Master Index (Index.md)".into());
+            }
+            Err(e) => self.status_msg = Some(format!("Index error: {e}")),
+        }
+    }
+
+    pub fn open_monthly_log(&mut self) {
+        if self.dirty {
+            self.save_current();
+        }
+        let anchor = self.doc.date.unwrap_or(self.today);
+        match self.vault.open_or_create_monthly_log(anchor) {
+            Ok(doc) => {
+                self.doc = doc;
+                self.selected_entry_idx = 0;
+                self.tag_filter = None;
+                self.dirty = false;
+                self.refresh_metadata();
+                self.status_msg = Some(format!("Opened Monthly Log ({})", self.doc.title));
+            }
+            Err(e) => self.status_msg = Some(format!("Monthly Log error: {e}")),
+        }
+    }
+
+    pub fn open_reflect_modal(&mut self) {
+        let open_triage_count = self
+            .vault
+            .collect_open_actions(self.today)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let global_paper_count = self
+            .vault
+            .collect_paper_pending()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        self.modal = ModalState::Reflect {
+            am_buf: String::new(),
+            pm_buf: String::new(),
+            active_field: 0,
+            open_triage_count,
+            global_paper_count,
+        };
+    }
+
+    pub fn open_triage_modal(&mut self) {
+        let items = self
+            .vault
+            .collect_open_actions(self.today)
+            .unwrap_or_default();
+        self.modal = ModalState::Triage { items, selected: 0 };
+    }
+
+    pub fn open_global_paper_modal(&mut self) {
+        let items = self.vault.collect_paper_pending().unwrap_or_default();
+        self.modal = ModalState::GlobalPaper { items, selected: 0 };
+    }
+
+    pub fn open_rename_space_modal(&mut self, rel_path: String, current_name: String) {
+        self.modal = ModalState::RenameSpace {
+            rel_path,
+            name_buf: current_name,
+        };
+    }
+
+    pub fn open_delete_space_modal(&mut self, rel_path: String, name: String) {
+        self.modal = ModalState::DeleteSpaceConfirm { rel_path, name };
+    }
+
     pub fn open_search_modal(&mut self) {
         self.modal = ModalState::Search {
             query: String::new(),
@@ -271,13 +371,24 @@ impl App {
                 label: format!("> Tomorrow ({})", tomorrow.format("%Y-%m-%d")),
                 rel_path: Vault::daily_rel_path(tomorrow),
                 scheduled: false,
+                future_month: None,
             },
             MigrateTarget {
-                label: "< Future Log (Scheduled)".to_string(),
+                label: "< Future Log (General)".to_string(),
                 rel_path: "Future Log.md".to_string(),
                 scheduled: true,
+                future_month: None,
             },
         ];
+
+        for ym in Vault::upcoming_months(self.today, 4).into_iter().skip(1) {
+            targets.push(MigrateTarget {
+                label: format!("< Future Log [{ym}]"),
+                rel_path: "Future Log.md".to_string(),
+                scheduled: true,
+                future_month: Some(ym),
+            });
+        }
 
         for sp in &self.spaces {
             if sp.rel_path != self.doc.rel_path && !sp.is_daily {
@@ -285,6 +396,7 @@ impl App {
                     label: format!("> Space: {}", sp.name),
                     rel_path: sp.rel_path.clone(),
                     scheduled: false,
+                    future_month: None,
                 });
             }
         }
@@ -396,6 +508,26 @@ impl App {
             }
             ModalState::Migrate { .. } => {
                 self.handle_migrate_modal_key(key);
+                return;
+            }
+            ModalState::Reflect { .. } => {
+                self.handle_reflect_modal_key(key);
+                return;
+            }
+            ModalState::Triage { .. } => {
+                self.handle_triage_modal_key(key);
+                return;
+            }
+            ModalState::GlobalPaper { .. } => {
+                self.handle_global_paper_modal_key(key);
+                return;
+            }
+            ModalState::RenameSpace { .. } => {
+                self.handle_rename_space_modal_key(key);
+                return;
+            }
+            ModalState::DeleteSpaceConfirm { .. } => {
+                self.handle_delete_space_modal_key(key);
                 return;
             }
             ModalState::None => {}
@@ -527,19 +659,354 @@ impl App {
 
         if let Some((entry_id, target)) = chosen {
             self.modal = ModalState::None;
-            match self.vault.migrate_entry(
-                &mut self.doc,
-                entry_id,
-                &target.rel_path,
-                target.scheduled,
-            ) {
+            let res = if let Some(month_ym) = &target.future_month {
+                self.vault
+                    .schedule_to_future_month(&mut self.doc, entry_id, month_ym)
+            } else {
+                self.vault.migrate_entry(
+                    &mut self.doc,
+                    entry_id,
+                    &target.rel_path,
+                    target.scheduled,
+                )
+            };
+            match res {
                 Ok(()) => {
                     self.refresh_metadata();
-                    self.status_msg = Some(format!("Migrated entry -> {}", target.rel_path));
+                    if let Some(month_ym) = target.future_month {
+                        self.status_msg =
+                            Some(format!("Scheduled entry -> Future Log [{month_ym}]"));
+                    } else {
+                        self.status_msg = Some(format!("Migrated entry -> {}", target.rel_path));
+                    }
                 }
                 Err(e) => {
                     self.status_msg = Some(format!("Migrate error: {e}"));
                 }
+            }
+        }
+    }
+
+    fn handle_reflect_modal_key(&mut self, key: KeyEvent) {
+        let mut submit_am: Option<String> = None;
+        let mut submit_pm: Option<String> = None;
+
+        if let ModalState::Reflect {
+            am_buf,
+            pm_buf,
+            active_field,
+            ..
+        } = &mut self.modal
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.modal = ModalState::None;
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                    *active_field = if *active_field == 0 { 1 } else { 0 };
+                    return;
+                }
+                KeyCode::Enter => {
+                    if *active_field == 0 {
+                        let txt = am_buf.trim().to_string();
+                        if !txt.is_empty() {
+                            submit_am = Some(txt);
+                            am_buf.clear();
+                        }
+                    } else {
+                        let txt = pm_buf.trim().to_string();
+                        if !txt.is_empty() {
+                            submit_pm = Some(txt);
+                            pm_buf.clear();
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    if *active_field == 0 {
+                        am_buf.pop();
+                    } else {
+                        pm_buf.pop();
+                    }
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    if *active_field == 0 {
+                        am_buf.push(c);
+                    } else {
+                        pm_buf.push(c);
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if let Some(txt) = submit_am
+            && let Ok(mut daily) = self.vault.open_or_create_daily(self.today, self.default_page)
+        {
+            daily.add_entry_with_modifier(
+                Vault::now_hhmm(),
+                EntryModifier::Priority,
+                Signifier::Action,
+                txt,
+            );
+            if self.vault.save_document(&daily).is_ok() {
+                if self.doc.rel_path == daily.rel_path {
+                    self.doc = daily;
+                }
+                self.refresh_metadata();
+                self.status_msg = Some("Logged AM Priority Focus (*. ) to Today".into());
+            }
+        }
+
+        if let Some(txt) = submit_pm
+            && let Ok(mut daily) = self.vault.open_or_create_daily(self.today, self.default_page)
+        {
+            daily.add_entry_with_modifier(
+                Vault::now_hhmm(),
+                EntryModifier::None,
+                Signifier::Emotion,
+                txt,
+            );
+            if self.vault.save_document(&daily).is_ok() {
+                if self.doc.rel_path == daily.rel_path {
+                    self.doc = daily;
+                }
+                self.refresh_metadata();
+                self.status_msg = Some("Logged PM Reflection (= ) to Today".into());
+            }
+        }
+    }
+
+    fn handle_triage_modal_key(&mut self, key: KeyEvent) {
+        let mut action_req: Option<(String, usize, &'static str)> = None;
+
+        if let ModalState::Triage { items, selected } = &mut self.modal {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.modal = ModalState::None;
+                    return;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !items.is_empty() {
+                        *selected = (*selected + 1).min(items.len() - 1);
+                    }
+                    return;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Char('>') | KeyCode::Enter => {
+                    if let Some(item) = items.get(*selected) {
+                        action_req = Some((item.rel_path.clone(), item.entry.id, "today"));
+                    }
+                }
+                KeyCode::Char('<') => {
+                    if let Some(item) = items.get(*selected) {
+                        action_req = Some((item.rel_path.clone(), item.entry.id, "future"));
+                    }
+                }
+                KeyCode::Char('x') | KeyCode::Char(' ') => {
+                    if let Some(item) = items.get(*selected) {
+                        action_req = Some((item.rel_path.clone(), item.entry.id, "done"));
+                    }
+                }
+                KeyCode::Char('~') => {
+                    if let Some(item) = items.get(*selected) {
+                        action_req = Some((item.rel_path.clone(), item.entry.id, "cancel"));
+                    }
+                }
+                _ => return,
+            }
+        }
+
+        if let Some((source_rel, entry_id, action)) = action_req {
+            match self.vault.triage_open_action(
+                &source_rel,
+                entry_id,
+                action,
+                self.today,
+                self.default_page,
+            ) {
+                Ok(()) => {
+                    let cur_rel = self.doc.rel_path.clone();
+                    if let Ok(reloaded) = self.vault.load_document(&cur_rel) {
+                        self.doc = reloaded;
+                    }
+                    self.refresh_metadata();
+                    let next_items = self
+                        .vault
+                        .collect_open_actions(self.today)
+                        .unwrap_or_default();
+                    if let ModalState::Triage { items, selected } = &mut self.modal {
+                        *items = next_items;
+                        if items.is_empty() {
+                            *selected = 0;
+                        } else {
+                            *selected = (*selected).min(items.len() - 1);
+                        }
+                    }
+                    self.status_msg = Some(format!("Triaged task ({action})"));
+                }
+                Err(e) => self.status_msg = Some(format!("Triage error: {e}")),
+            }
+        }
+    }
+
+    fn handle_global_paper_modal_key(&mut self, key: KeyEvent) {
+        let mut sync_one: Option<(String, usize)> = None;
+        let mut sync_all = false;
+
+        if let ModalState::GlobalPaper { items, selected } = &mut self.modal {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.modal = ModalState::None;
+                    return;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !items.is_empty() {
+                        *selected = (*selected + 1).min(items.len() - 1);
+                    }
+                    return;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Char('m') | KeyCode::Char(' ') | KeyCode::Enter => {
+                    if let Some(item) = items.get(*selected) {
+                        sync_one = Some((item.rel_path.clone(), item.entry.id));
+                    }
+                }
+                KeyCode::Char('M') => {
+                    sync_all = true;
+                }
+                _ => return,
+            }
+        }
+
+        if let Some((rel_path, entry_id)) = sync_one {
+            match self.vault.mark_entry_paper_synced(&rel_path, entry_id, true) {
+                Ok(()) => {
+                    let cur_rel = self.doc.rel_path.clone();
+                    if let Ok(reloaded) = self.vault.load_document(&cur_rel) {
+                        self.doc = reloaded;
+                    }
+                    self.refresh_metadata();
+                    let next_items = self.vault.collect_paper_pending().unwrap_or_default();
+                    if let ModalState::GlobalPaper { items, selected } = &mut self.modal {
+                        *items = next_items;
+                        if items.is_empty() {
+                            *selected = 0;
+                        } else {
+                            *selected = (*selected).min(items.len() - 1);
+                        }
+                    }
+                    self.status_msg = Some("Marked entry carried to paper [paper:ok]".into());
+                }
+                Err(e) => self.status_msg = Some(format!("Paper sync error: {e}")),
+            }
+        } else if sync_all {
+            match self.vault.mark_all_vault_paper_synced() {
+                Ok(n) => {
+                    let cur_rel = self.doc.rel_path.clone();
+                    if let Ok(reloaded) = self.vault.load_document(&cur_rel) {
+                        self.doc = reloaded;
+                    }
+                    self.refresh_metadata();
+                    self.modal = ModalState::GlobalPaper {
+                        items: vec![],
+                        selected: 0,
+                    };
+                    self.status_msg = Some(format!(
+                        "Marked {n} entries across vault carried to paper"
+                    ));
+                }
+                Err(e) => self.status_msg = Some(format!("Paper sync error: {e}")),
+            }
+        }
+    }
+
+    fn handle_rename_space_modal_key(&mut self, key: KeyEvent) {
+        let mut commit: Option<(String, String)> = None;
+
+        if let ModalState::RenameSpace { rel_path, name_buf } = &mut self.modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.modal = ModalState::None;
+                    return;
+                }
+                KeyCode::Enter => {
+                    let new_name = name_buf.trim().to_string();
+                    if !new_name.is_empty() {
+                        commit = Some((rel_path.clone(), new_name));
+                    } else {
+                        self.modal = ModalState::None;
+                        return;
+                    }
+                }
+                KeyCode::Backspace => {
+                    name_buf.pop();
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    name_buf.push(c);
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if let Some((old_rel, new_name)) = commit {
+            self.modal = ModalState::None;
+            match self.vault.rename_space(&old_rel, &new_name) {
+                Ok(doc) => {
+                    if self.doc.rel_path == old_rel {
+                        self.doc = doc;
+                    }
+                    self.refresh_metadata();
+                    self.status_msg = Some(format!("Renamed space to '{new_name}'"));
+                }
+                Err(e) => self.status_msg = Some(format!("Rename space failed: {e}")),
+            }
+        }
+    }
+
+    fn handle_delete_space_modal_key(&mut self, key: KeyEvent) {
+        let mut confirmed_rel: Option<(String, String)> = None;
+
+        if let ModalState::DeleteSpaceConfirm { rel_path, name } = &self.modal {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    confirmed_rel = Some((rel_path.clone(), name.clone()));
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                    self.modal = ModalState::None;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        if let Some((rel_path, name)) = confirmed_rel {
+            self.modal = ModalState::None;
+            match self.vault.delete_space(&rel_path) {
+                Ok(()) => {
+                    if self.doc.rel_path == rel_path
+                        && let Ok(daily) =
+                            self.vault.open_or_create_daily(self.today, self.default_page)
+                    {
+                        self.doc = daily;
+                        self.selected_entry_idx = 0;
+                        self.tag_filter = None;
+                    }
+                    self.active_space_idx = 0;
+                    self.refresh_metadata();
+                    self.status_msg = Some(format!("Deleted space '{name}'"));
+                }
+                Err(e) => self.status_msg = Some(format!("Delete space failed: {e}")),
             }
         }
     }
@@ -694,13 +1161,37 @@ impl App {
                     self.status_msg = Some("Usage: :thread <page-number>".into());
                 }
             }
-            "index" => match self.vault.update_master_index() {
-                Ok(_) => {
-                    self.open_rel_path("Index.md");
-                    self.status_msg = Some("Opened Master Index (Index.md)".into());
+            "index" => self.open_master_index(),
+            "monthly-log" | "mlog" => self.open_monthly_log(),
+            "reflect" => self.open_reflect_modal(),
+            "triage" => self.open_triage_modal(),
+            "paper" => self.open_global_paper_modal(),
+            "rename-space" => {
+                if arg.is_empty() {
+                    self.status_msg = Some("Usage: :rename-space <New Name>".into());
+                } else if !self.doc.rel_path.starts_with("Spaces/") {
+                    self.status_msg = Some("Open a custom Space first to rename it".into());
+                } else {
+                    let old_rel = self.doc.rel_path.clone();
+                    match self.vault.rename_space(&old_rel, arg) {
+                        Ok(doc) => {
+                            self.doc = doc;
+                            self.refresh_metadata();
+                            self.status_msg = Some(format!("Renamed space to '{arg}'"));
+                        }
+                        Err(e) => self.status_msg = Some(format!("Rename space failed: {e}")),
+                    }
                 }
-                Err(e) => self.status_msg = Some(format!("Index error: {e}")),
-            },
+            }
+            "delete-space" => {
+                if !self.doc.rel_path.starts_with("Spaces/") {
+                    self.status_msg = Some("Open a custom Space first to delete it".into());
+                } else {
+                    let rel = self.doc.rel_path.clone();
+                    let name = self.doc.title.clone();
+                    self.open_delete_space_modal(rel, name);
+                }
+            }
             "space" => {
                 if arg.is_empty() {
                     self.status_msg = Some("Usage: :space <Space Name>".into());
@@ -822,6 +1313,11 @@ impl App {
         match key.code {
             KeyCode::Tab => self.cycle_space(),
             KeyCode::Char('/') => self.open_search_modal(),
+            KeyCode::Char('I') => self.open_master_index(),
+            KeyCode::Char('L') => self.open_monthly_log(),
+            KeyCode::Char('R') => self.open_reflect_modal(),
+            KeyCode::Char('T') => self.open_triage_modal(),
+            KeyCode::Char('P') => self.open_global_paper_modal(),
             KeyCode::Char('j') | KeyCode::Down => {
                 if !self.spaces.is_empty() {
                     self.active_space_idx = (self.active_space_idx + 1) % self.spaces.len();
@@ -838,6 +1334,24 @@ impl App {
                     };
                     let rel = self.spaces[self.active_space_idx].rel_path.clone();
                     self.open_rel_path(&rel);
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(sp) = self.spaces.get(self.active_space_idx).cloned() {
+                    if sp.is_daily {
+                        self.status_msg = Some("Daily Log cannot be renamed".into());
+                    } else {
+                        self.open_rename_space_modal(sp.rel_path, sp.name);
+                    }
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(sp) = self.spaces.get(self.active_space_idx).cloned() {
+                    if sp.is_daily {
+                        self.status_msg = Some("Daily Log cannot be deleted".into());
+                    } else {
+                        self.open_delete_space_modal(sp.rel_path, sp.name);
+                    }
                 }
             }
             KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
@@ -858,6 +1372,11 @@ impl App {
         match key.code {
             KeyCode::Tab => self.cycle_space(),
             KeyCode::Char('/') => self.open_search_modal(),
+            KeyCode::Char('I') => self.open_master_index(),
+            KeyCode::Char('L') => self.open_monthly_log(),
+            KeyCode::Char('R') => self.open_reflect_modal(),
+            KeyCode::Char('T') => self.open_triage_modal(),
+            KeyCode::Char('P') => self.open_global_paper_modal(),
             KeyCode::Char('j') | KeyCode::Down => {
                 if !self.vault_tree.nodes.is_empty() {
                     self.selected_vault_idx =
@@ -901,6 +1420,11 @@ impl App {
         match key.code {
             KeyCode::Tab => self.cycle_space(),
             KeyCode::Char('/') => self.open_search_modal(),
+            KeyCode::Char('I') => self.open_master_index(),
+            KeyCode::Char('L') => self.open_monthly_log(),
+            KeyCode::Char('R') => self.open_reflect_modal(),
+            KeyCode::Char('T') => self.open_triage_modal(),
+            KeyCode::Char('P') => self.open_global_paper_modal(),
             KeyCode::Char('[') => self.step_day(-1),
             KeyCode::Char(']') => self.step_day(1),
             KeyCode::Char('t') => self.execute_command("today"),
@@ -961,6 +1485,53 @@ impl App {
                     self.dirty = true;
                     self.save_current();
                     self.status_msg = Some("Toggled Cancelled (~)".into());
+                }
+            }
+            // `c` cycles entry base signifier: `.` -> `o` -> `=` -> `-` -> `.`
+            KeyCode::Char('c') => {
+                if let Some((real_idx, _)) = self
+                    .filtered_entries()
+                    .get(self.selected_entry_idx)
+                    .map(|(i, e)| (*i, *e))
+                {
+                    let next = self.doc.entries[real_idx].signifier.cycle_base();
+                    self.doc.entries[real_idx].signifier = next;
+                    self.dirty = true;
+                    self.save_current();
+                    self.status_msg = Some(format!(
+                        "Signifier -> {} ({})",
+                        next.symbol(),
+                        next.label()
+                    ));
+                }
+            }
+            // `}` / `{` indents / outdents nested sub-tasks (0..=3)
+            KeyCode::Char('}') => {
+                if let Some((real_idx, _)) = self
+                    .filtered_entries()
+                    .get(self.selected_entry_idx)
+                    .map(|(i, e)| (*i, *e))
+                {
+                    let cur = self.doc.entries[real_idx].indent;
+                    if cur < 3 {
+                        self.doc.entries[real_idx].indent = cur + 1;
+                        self.dirty = true;
+                        self.save_current();
+                    }
+                }
+            }
+            KeyCode::Char('{') => {
+                if let Some((real_idx, _)) = self
+                    .filtered_entries()
+                    .get(self.selected_entry_idx)
+                    .map(|(i, e)| (*i, *e))
+                {
+                    let cur = self.doc.entries[real_idx].indent;
+                    if cur > 0 {
+                        self.doc.entries[real_idx].indent = cur - 1;
+                        self.dirty = true;
+                        self.save_current();
+                    }
                 }
             }
             // `*` toggles Priority modifier
@@ -1191,12 +1762,106 @@ mod tests {
         assert_eq!(app.doc.date.unwrap(), original_date);
         assert!(matches!(app.modal, ModalState::None));
 
-        // Smart migrate modal with `>` -> select 3rd item (Space: Personal or Studio & Work)
+        // Smart migrate modal with `>` -> select a Space (after Tomorrow, Future Log, and 3 month buckets)
         app.handle_key(KeyEvent::from(KeyCode::Char('>')));
         assert!(matches!(app.modal, ModalState::Migrate { .. }));
-        app.handle_key(KeyEvent::from(KeyCode::Down));
-        app.handle_key(KeyEvent::from(KeyCode::Down));
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Down));
+        }
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.doc.entries[0].signifier, Signifier::Migrated);
+    }
+
+    #[test]
+    fn tui_bujo_index_monthly_reflect_cycle_indent_and_spaces() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::open_or_init(
+            dir.path().to_path_buf(),
+            &["Studio & Work".into(), "Personal".into()],
+        )
+        .unwrap();
+        let mut app = App::new(vault, 12).unwrap();
+
+        // Add an action entry
+        app.doc
+            .add_entry("09:00".into(), Signifier::Action, "Draft layout".into());
+        app.save_current();
+        app.focus = FocusPane::RapidLog;
+
+        // Cycle entry signifier with `c`: Action -> Event -> Emotion -> Note -> Action
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(app.doc.entries[0].signifier, Signifier::Event);
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(app.doc.entries[0].signifier, Signifier::Emotion);
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(app.doc.entries[0].signifier, Signifier::Note);
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(app.doc.entries[0].signifier, Signifier::Action);
+
+        // Indent & outdent with `}` and `{`
+        app.handle_key(KeyEvent::from(KeyCode::Char('}')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('}')));
+        assert_eq!(app.doc.entries[0].indent, 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('{')));
+        assert_eq!(app.doc.entries[0].indent, 1);
+
+        // AM / PM Reflection modal (`R`)
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        assert!(matches!(app.modal, ModalState::Reflect { .. }));
+        for ch in "Ship TUI index".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        for ch in "Calm and focused".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.modal, ModalState::None));
+        assert!(app
+            .doc
+            .entries
+            .iter()
+            .any(|e| e.modifier == EntryModifier::Priority && e.text == "Ship TUI index"));
+        assert!(app
+            .doc
+            .entries
+            .iter()
+            .any(|e| e.signifier == Signifier::Emotion && e.text == "Calm and focused"));
+
+        // Master Index (`I`) and Monthly Log (`L`)
+        app.handle_key(KeyEvent::from(KeyCode::Char('I')));
+        assert_eq!(app.doc.rel_path, "Index.md");
+        app.handle_key(KeyEvent::from(KeyCode::Char('L')));
+        assert!(app.doc.rel_path.ends_with("-monthly.md"));
+
+        // Rename & Delete Space from Spaces pane (`s` -> `j` -> `r` / `d`)
+        app.focus = FocusPane::Spaces;
+        app.active_space_idx = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Char('j'))); // move to first custom space
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert!(matches!(app.modal, ModalState::RenameSpace { .. }));
+        // Clear existing name buffer and type new name
+        for _ in 0..32 {
+            app.handle_key(KeyEvent::from(KeyCode::Backspace));
+        }
+        for ch in "Deep Work".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.spaces.iter().any(|s| s.name == "Deep Work"));
+
+        // Delete the renamed space
+        let dw_idx = app
+            .spaces
+            .iter()
+            .position(|s| s.name == "Deep Work")
+            .unwrap();
+        app.active_space_idx = dw_idx;
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(matches!(app.modal, ModalState::DeleteSpaceConfirm { .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+        assert!(!app.spaces.iter().any(|s| s.name == "Deep Work"));
     }
 }
