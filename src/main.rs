@@ -8,6 +8,7 @@ use core::config::FolioConfig;
 use core::io::{ExportFormat, ImportFormat, export_document, import_from_file};
 use core::model::{Signifier, parse_rapid_input_full};
 use core::review::{generate_monthly_review, generate_weekly_review};
+use core::updater::{check_for_updates, cleanup_old_binary, install_update};
 use core::vault::Vault;
 use std::fs;
 use std::path::PathBuf;
@@ -98,10 +99,25 @@ enum Commands {
     Index,
     /// Open or create the current month's Monthly Log (Calendar Page + Task List)
     Monthly,
+    /// Check for updates from GitHub Releases and optionally install the latest version
+    Update {
+        /// Only check for updates without installing
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even if already on the latest version
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
+    cleanup_old_binary();
     let cli = Cli::parse();
+
+    if let Some(Commands::Update { check, force }) = &cli.command {
+        return handle_update_command(*check, *force);
+    }
+
     let cfg = FolioConfig::load();
     let vault_path = cfg.resolve_vault_path(cli.vault);
     let vault = Vault::open_or_init(vault_path, &cfg.default_spaces)?;
@@ -235,6 +251,36 @@ fn handle_subcommand(vault: &Vault, default_page: u32, cmd: Commands) -> Result<
                 println!("{line}");
             }
         }
+        Commands::Update { check, force } => {
+            return handle_update_command(check, force);
+        }
     }
+    Ok(())
+}
+
+fn handle_update_command(check_only: bool, force: bool) -> Result<()> {
+    println!("Checking GitHub Releases for Folio updates...");
+    let info = check_for_updates()?;
+    println!(
+        "Current version: v{} | Latest release: v{}",
+        info.current_version, info.latest_version
+    );
+
+    if !info.has_update && !force {
+        println!("Folio is already up to date.");
+        return Ok(());
+    }
+
+    if check_only {
+        if info.has_update {
+            println!("Update available: v{} ({})", info.latest_version, info.release_url);
+            println!("Run `folio update` to download and install it.");
+        }
+        return Ok(());
+    }
+
+    println!("Downloading {}...", info.asset_name);
+    let outcome = install_update(&info)?;
+    println!("{}", outcome.message);
     Ok(())
 }

@@ -446,6 +446,32 @@
       font-size: 11px;
       color: var(--tertiary);
     }
+    .update-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 14px;
+      background: var(--surface-container);
+      border: 1px solid var(--primary);
+      border-radius: 6px;
+      font-size: 11.5px;
+    }
+    .update-banner.visible {
+      display: flex;
+    }
+    .checkbox-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .checkbox-option input[type="checkbox"] {
+      accent-color: var(--primary);
+      width: 15px;
+      height: 15px;
+    }
   </style>
 </head>
 <body>
@@ -474,6 +500,16 @@
         <span class="badge">[SYNCED .md]</span>
       </div>
     </header>
+
+    <!-- Update Available Banner -->
+    <div id="update-banner" class="update-banner" role="status" aria-live="polite">
+      <span id="update-banner-text" style="color: var(--primary);"></span>
+      <div class="row-flex">
+        <button type="button" id="banner-install-btn" class="btn btn-primary">Install Update</button>
+        <a id="banner-notes-link" class="btn" href="https://github.com/HamidRezaAshkiyan/folio/releases" target="_blank" rel="noopener">Release Notes ↗</a>
+        <button type="button" id="banner-dismiss-btn" class="mini-btn" aria-label="Dismiss update notice">✕</button>
+      </div>
+    </div>
 
     <!-- 3-Column 6-Pane Grid -->
     <div class="grid">
@@ -669,6 +705,21 @@
         <label class="radio-option">
           <input type="radio" name="rtl_mode" value="rtl"> RTL (Persian)
         </label>
+      </fieldset>
+
+      <fieldset class="settings-fieldset">
+        <legend>Updates</legend>
+        <label class="checkbox-option">
+          <input type="checkbox" id="cfg-auto-updates" name="auto_check_updates">
+          Auto-check for updates on startup
+        </label>
+        <div class="row-flex" style="width: 100%; justify-content: space-between;">
+          <span id="cfg-update-status" class="form-hint" role="status" aria-live="polite">v{{VERSION}}</span>
+          <div class="row-flex">
+            <button type="button" id="cfg-check-updates-btn" class="btn">Check for Updates</button>
+            <button type="button" id="cfg-install-update-btn" class="btn btn-primary" style="display:none;">Install Update</button>
+          </div>
+        </div>
       </fieldset>
 
       <div class="form-hint">Config file: <code id="cfg-file-path">~/.config/folio/config.toml</code></div>
@@ -1138,6 +1189,7 @@
         if (themeRadio) themeRadio.checked = true;
         const rtlRadio = settingsForm.querySelector(`input[name="rtl_mode"][value="${cfg.rtl_mode || 'auto'}"]`);
         if (rtlRadio) rtlRadio.checked = true;
+        document.getElementById('cfg-auto-updates').checked = cfg.auto_check_updates !== false;
       } catch (err) {
         settingsStatus.textContent = `Could not load settings: ${err.message}`;
       }
@@ -1164,6 +1216,7 @@
         .filter(Boolean);
       const guiTheme = String(formData.get('gui_theme') || 'dark');
       const rtlMode = String(formData.get('rtl_mode') || 'auto');
+      const autoCheckUpdates = document.getElementById('cfg-auto-updates').checked;
 
       try {
         const res = await fetch('/api/config', {
@@ -1175,6 +1228,7 @@
             default_spaces: spaces,
             gui_theme: guiTheme,
             rtl_mode: rtlMode,
+            auto_check_updates: autoCheckUpdates,
           }),
         });
         const json = await res.json();
@@ -1195,7 +1249,76 @@
       }
     });
 
+    // Auto-update checker & installer
+    const updateBanner = document.getElementById('update-banner');
+    const updateBannerText = document.getElementById('update-banner-text');
+    const bannerInstallBtn = document.getElementById('banner-install-btn');
+    const bannerNotesLink = document.getElementById('banner-notes-link');
+    const cfgUpdateStatus = document.getElementById('cfg-update-status');
+    const cfgCheckBtn = document.getElementById('cfg-check-updates-btn');
+    const cfgInstallBtn = document.getElementById('cfg-install-update-btn');
+
+    async function runUpdateCheck(manual = false) {
+      if (manual) {
+        cfgCheckBtn.disabled = true;
+        cfgUpdateStatus.textContent = 'Checking GitHub Releases...';
+      }
+      try {
+        const res = await fetch('/api/update/check');
+        const info = await res.json();
+        if (!res.ok) throw new Error(info.error || 'Check failed');
+        if (info.has_update) {
+          updateBannerText.textContent = `Folio v${info.latest_version} is available (current: v${info.current_version})`;
+          bannerNotesLink.href = info.release_url;
+          updateBanner.classList.add('visible');
+          cfgUpdateStatus.textContent = `Update available: v${info.latest_version}`;
+          cfgInstallBtn.style.display = '';
+        } else {
+          cfgUpdateStatus.textContent = `Up to date (v${info.current_version})`;
+          cfgInstallBtn.style.display = 'none';
+        }
+      } catch (err) {
+        if (manual) cfgUpdateStatus.textContent = `Check failed: ${err.message}`;
+      } finally {
+        if (manual) cfgCheckBtn.disabled = false;
+      }
+    }
+
+    async function runUpdateInstall() {
+      bannerInstallBtn.disabled = true;
+      cfgInstallBtn.disabled = true;
+      updateBannerText.textContent = 'Downloading & installing update...';
+      cfgUpdateStatus.textContent = 'Downloading & installing update...';
+      try {
+        const res = await fetch('/api/update/install', { method: 'POST' });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || 'Install failed');
+        updateBannerText.textContent = out.message;
+        cfgUpdateStatus.textContent = out.message;
+        bannerInstallBtn.style.display = 'none';
+        cfgInstallBtn.style.display = 'none';
+      } catch (err) {
+        updateBannerText.textContent = `Update failed: ${err.message}`;
+        cfgUpdateStatus.textContent = `Update failed: ${err.message}`;
+        bannerInstallBtn.disabled = false;
+        cfgInstallBtn.disabled = false;
+      }
+    }
+
+    cfgCheckBtn.addEventListener('click', () => runUpdateCheck(true));
+    cfgInstallBtn.addEventListener('click', runUpdateInstall);
+    bannerInstallBtn.addEventListener('click', runUpdateInstall);
+    document.getElementById('banner-dismiss-btn').addEventListener('click', () => {
+      updateBanner.classList.remove('visible');
+    });
+
     api('/api/state');
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg.auto_check_updates !== false) runUpdateCheck(false);
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

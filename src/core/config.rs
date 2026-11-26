@@ -33,6 +33,10 @@ fn default_persian_font() -> String {
     "vazirmatn".to_string()
 }
 
+fn default_auto_check_updates() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolioConfig {
     pub vault_path: PathBuf,
@@ -44,6 +48,8 @@ pub struct FolioConfig {
     pub gui_theme: String,
     #[serde(default = "default_persian_font")]
     pub persian_font: String,
+    #[serde(default = "default_auto_check_updates")]
+    pub auto_check_updates: bool,
 }
 
 impl Default for FolioConfig {
@@ -60,6 +66,7 @@ impl Default for FolioConfig {
             rtl_mode: RtlMode::Auto,
             gui_theme: default_gui_theme(),
             persian_font: default_persian_font(),
+            auto_check_updates: default_auto_check_updates(),
         }
     }
 }

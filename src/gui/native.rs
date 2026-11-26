@@ -6,6 +6,7 @@ use crate::core::model::{
     VaultTree, is_rtl_text, parse_rapid_input_full,
 };
 use crate::core::review::{generate_monthly_review, generate_weekly_review};
+use crate::core::updater::{InstallOutcome, UpdateInfo, check_for_updates, install_update};
 use crate::core::vault::Vault;
 use anyhow::Result;
 use chrono::Duration;
@@ -154,6 +155,13 @@ struct FolioApp {
     settings_page_input: String,
     settings_spaces_input: String,
 
+    // Auto-update state
+    update_checking: bool,
+    update_installing: bool,
+    update_info: Option<UpdateInfo>,
+    update_dismissed: bool,
+    update_feedback: Option<String>,
+
     // Status banner
     status_msg: Option<String>,
 }
@@ -270,6 +278,15 @@ enum Message {
     SettingsSpacesChanged(String),
     SaveSettings,
     ResetSettingsDefaults,
+
+    // Auto-update
+    ToggleAutoCheckUpdates,
+    CheckForUpdates,
+    UpdateCheckFinished(Result<UpdateInfo, String>),
+    InstallUpdate,
+    UpdateInstallFinished(Result<InstallOutcome, String>),
+    OpenReleasePage,
+    DismissUpdateBanner,
 }
 
 pub fn run_native_gui(vault: Vault, config: FolioConfig) -> Result<()> {
@@ -283,7 +300,18 @@ pub fn run_native_gui(vault: Vault, config: FolioConfig) -> Result<()> {
                 .expect("launch context lock")
                 .take()
                 .expect("boot called once");
-            FolioApp::new(ctx.vault, ctx.config)
+            let auto_check = ctx.config.auto_check_updates;
+            let mut app = FolioApp::new(ctx.vault, ctx.config);
+            let boot_task = if auto_check {
+                app.update_checking = true;
+                Task::perform(
+                    async { check_for_updates().map_err(|e| e.to_string()) },
+                    Message::UpdateCheckFinished,
+                )
+            } else {
+                Task::none()
+            };
+            (app, boot_task)
         },
         FolioApp::update,
         FolioApp::view,
@@ -365,6 +393,11 @@ impl FolioApp {
             settings_vault_input,
             settings_page_input,
             settings_spaces_input,
+            update_checking: false,
+            update_installing: false,
+            update_info: None,
+            update_dismissed: false,
+            update_feedback: None,
             status_msg: None,
         }
     }
@@ -1250,7 +1283,94 @@ impl FolioApp {
                 self.rtl_mode = def.rtl_mode;
                 self.is_dark = def.gui_theme != "light";
                 self.persian_font = def.persian_font;
+                self.config.auto_check_updates = def.auto_check_updates;
                 return self.update(Message::SaveSettings);
+            }
+            Message::ToggleAutoCheckUpdates => {
+                self.config.auto_check_updates = !self.config.auto_check_updates;
+                self.persist_config();
+            }
+            Message::CheckForUpdates => {
+                if !self.update_checking && !self.update_installing {
+                    self.update_checking = true;
+                    self.update_dismissed = false;
+                    self.update_feedback = Some(
+                        self.tr("Checking GitHub Releases...", "در حال بررسی نسخه‌های جدید...")
+                            .to_string(),
+                    );
+                    return Task::perform(
+                        async { check_for_updates().map_err(|e| e.to_string()) },
+                        Message::UpdateCheckFinished,
+                    );
+                }
+            }
+            Message::UpdateCheckFinished(res) => {
+                self.update_checking = false;
+                match res {
+                    Ok(info) => {
+                        if info.has_update {
+                            self.update_feedback = Some(format!(
+                                "{} v{}",
+                                self.tr("Update available:", "نسخه جدید موجود است:"),
+                                info.latest_version
+                            ));
+                        } else {
+                            self.update_feedback = Some(format!(
+                                "{} (v{})",
+                                self.tr("Up to date", "به‌روز است"),
+                                info.current_version
+                            ));
+                        }
+                        self.update_info = Some(info);
+                    }
+                    Err(e) => {
+                        if self.active_panel == ActivePanel::Settings {
+                            self.update_feedback = Some(format!("Update check failed: {e}"));
+                        }
+                    }
+                }
+            }
+            Message::InstallUpdate => {
+                if !self.update_installing
+                    && let Some(info) = self.update_info.clone()
+                {
+                    self.update_installing = true;
+                    self.update_feedback = Some(format!(
+                        "{} v{}...",
+                        self.tr("Downloading & installing", "در حال دانلود و نصب"),
+                        info.latest_version
+                    ));
+                    return Task::perform(
+                        async move { install_update(&info).map_err(|e| e.to_string()) },
+                        Message::UpdateInstallFinished,
+                    );
+                }
+            }
+            Message::UpdateInstallFinished(res) => {
+                self.update_installing = false;
+                match res {
+                    Ok(outcome) => {
+                        self.update_dismissed = true;
+                        self.update_feedback = Some(outcome.message.clone());
+                        self.status_msg = Some(outcome.message);
+                    }
+                    Err(e) => {
+                        let msg = format!("Update install failed: {e}");
+                        self.update_feedback = Some(msg.clone());
+                        self.status_msg = Some(msg);
+                    }
+                }
+            }
+            Message::OpenReleasePage => {
+                let url = self
+                    .update_info
+                    .as_ref()
+                    .map(|u| u.release_url.as_str())
+                    .unwrap_or("https://github.com/HamidRezaAshkiyan/folio/releases");
+                let _ = open::that(url);
+            }
+            Message::DismissUpdateBanner => {
+                self.update_dismissed = true;
             }
         }
 
@@ -1278,6 +1398,90 @@ impl FolioApp {
         };
 
         let mut root_col = column![top_bar].spacing(8);
+
+        // Non-intrusive Update Available banner
+        if let Some(info) = &self.update_info
+            && info.has_update
+            && !self.update_dismissed
+        {
+            let msg_text = if self.update_installing {
+                format!(
+                    "{} v{}...",
+                    self.tr("Installing Folio", "در حال نصب فولیو"),
+                    info.latest_version
+                )
+            } else {
+                format!(
+                    "{} v{} ({} v{})",
+                    self.tr("Folio update available:", "نسخه جدید فولیو موجود است:"),
+                    info.latest_version,
+                    self.tr("current", "فعلی"),
+                    info.current_version
+                )
+            };
+
+            let install_btn = pill_button(
+                if self.update_installing {
+                    self.tr("Installing...", "در حال نصب...")
+                } else {
+                    self.tr("Install Update", "نصب به‌روزرسانی")
+                },
+                true,
+                p,
+                ui_font,
+                Message::InstallUpdate,
+            );
+            let notes_btn = pill_button(
+                self.tr("Release Notes", "تغییرات نسخه"),
+                false,
+                p,
+                ui_font,
+                Message::OpenReleasePage,
+            );
+            let dismiss_btn = pill_button(
+                "✕",
+                false,
+                p,
+                ui_font,
+                Message::DismissUpdateBanner,
+            );
+
+            let banner_row = if ui_rtl {
+                row![
+                    dismiss_btn,
+                    notes_btn,
+                    install_btn,
+                    Space::new().width(Length::Fill),
+                    text(msg_text)
+                        .size(11)
+                        .color(p.primary)
+                        .font(ui_font)
+                        .shaping(text::Shaping::Advanced),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            } else {
+                row![
+                    text(msg_text)
+                        .size(11)
+                        .color(p.primary)
+                        .font(ui_font)
+                        .shaping(text::Shaping::Advanced),
+                    Space::new().width(Length::Fill),
+                    install_btn,
+                    notes_btn,
+                    dismiss_btn,
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            };
+
+            let update_banner = container(banner_row)
+                .width(Length::Fill)
+                .padding([5, 10])
+                .style(move |_| pane_style(p.surface_container, p.primary));
+            root_col = root_col.push(update_banner);
+        }
 
         // If Persian UI is active and neither Vazirmatn nor Dastkhat is installed,
         // offer a zero-bloat one-click installer powered by open-fonts-installer.
@@ -2483,7 +2687,66 @@ impl FolioApp {
         .spacing(4)
         .align_y(Alignment::Center);
 
-        // 4. Config path + Save / Reset actions row
+        // 4. Updates row
+        let auto_update_btn = pill_button(
+            if self.config.auto_check_updates {
+                self.tr("Auto-check Updates: ON", "بررسی خودکار به‌روزرسانی: روشن")
+            } else {
+                self.tr("Auto-check Updates: OFF", "بررسی خودکار به‌روزرسانی: خاموش")
+            },
+            self.config.auto_check_updates,
+            p,
+            ui_font,
+            Message::ToggleAutoCheckUpdates,
+        );
+
+        let check_now_btn = pill_button(
+            if self.update_checking {
+                self.tr("Checking...", "در حال بررسی...")
+            } else {
+                self.tr("Check for Updates", "بررسی به‌روزرسانی")
+            },
+            false,
+            p,
+            ui_font,
+            Message::CheckForUpdates,
+        );
+
+        let update_status_str = self
+            .update_feedback
+            .clone()
+            .unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
+        let update_status = text(update_status_str)
+            .size(11)
+            .color(p.tertiary)
+            .font(ui_font)
+            .shaping(text::Shaping::Advanced);
+
+        let mut updates_row = row![auto_update_btn, check_now_btn]
+            .spacing(6)
+            .align_y(Alignment::Center);
+
+        if let Some(info) = &self.update_info
+            && info.has_update
+        {
+            updates_row = updates_row.push(pill_button(
+                if self.update_installing {
+                    self.tr("Installing...", "در حال نصب...")
+                } else {
+                    self.tr("Install Update", "نصب به‌روزرسانی")
+                },
+                true,
+                p,
+                ui_font,
+                Message::InstallUpdate,
+            ));
+        }
+
+        updates_row = updates_row
+            .push(Space::new().width(Length::Fixed(8.0)))
+            .push(update_status);
+
+        // 5. Config path + Save / Reset actions row
         let cfg_display = FolioConfig::config_path().to_string_lossy().to_string();
         let cfg_info = text(format!(
             "{} {cfg_display}",
@@ -2538,7 +2801,7 @@ impl FolioApp {
             .align_y(Alignment::Center)
         };
 
-        container(column![head, vault_row, meta_row, prefs_row, actions_row].spacing(8))
+        container(column![head, vault_row, meta_row, prefs_row, updates_row, actions_row].spacing(8))
             .width(Length::Fill)
             .padding(10)
             .style(move |_| pane_style(p.surface_low, p.primary))

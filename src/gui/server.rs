@@ -5,6 +5,7 @@ use crate::core::model::{
     Document, EntryModifier, Signifier, SpaceInfo, VaultTree, parse_rapid_input_full,
 };
 use crate::core::review::{generate_monthly_review, generate_weekly_review};
+use crate::core::updater::{check_for_updates, install_update};
 use crate::core::vault::Vault;
 use anyhow::{Context, Result};
 use chrono::Duration;
@@ -99,6 +100,7 @@ struct ConfigResponse {
     rtl_mode: RtlMode,
     gui_theme: String,
     persian_font: String,
+    auto_check_updates: bool,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +117,8 @@ struct UpdateConfigReq {
     gui_theme: Option<String>,
     #[serde(default)]
     persian_font: Option<String>,
+    #[serde(default)]
+    auto_check_updates: Option<bool>,
 }
 
 pub fn run_gui(mut vault: Vault, mut config: FolioConfig, port: u16, open_browser: bool) -> Result<()> {
@@ -151,6 +155,7 @@ fn build_config_response(vault: &Vault, config: &FolioConfig) -> ConfigResponse 
         rtl_mode: config.rtl_mode,
         gui_theme: config.gui_theme.clone(),
         persian_font: config.persian_font.clone(),
+        auto_check_updates: config.auto_check_updates,
     }
 }
 
@@ -171,6 +176,17 @@ fn handle_request(
             let cfg = build_config_response(vault, config);
             json_response(StatusCode(200), &cfg)
         }
+        (Method::Get, "/api/update/check") => match check_for_updates() {
+            Ok(info) => json_response(StatusCode(200), &info),
+            Err(e) => error_response(502, &e.to_string()),
+        },
+        (Method::Post, "/api/update/install") => match check_for_updates() {
+            Ok(info) => match install_update(&info) {
+                Ok(outcome) => json_response(StatusCode(200), &outcome),
+                Err(e) => error_response(500, &e.to_string()),
+            },
+            Err(e) => error_response(502, &e.to_string()),
+        },
         (Method::Post, "/api/config") => match read_json::<UpdateConfigReq>(req) {
             Ok(body) => {
                 if let Some(page) = body.notebook_page
@@ -200,6 +216,9 @@ fn handle_request(
                     && !font.trim().is_empty()
                 {
                     config.persian_font = font.trim().to_string();
+                }
+                if let Some(auto_upd) = body.auto_check_updates {
+                    config.auto_check_updates = auto_upd;
                 }
 
                 if let Some(raw_vault) = body.vault_path {
